@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CG - Planeta Barbie</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <canvas id="glcanvas"> </canvas>
+
+    <div id="control-panel">
+        <h2>Controles do Planeta</h2>
+
+        <div class="control-group">
+            <label for="noise-type">Tipo de Noise</label>
+            <select id="noise-type">
+                <option value="perlin">Perlin Noise</option>
+                <option value="random">Aleatório</option>
+                <option value="ridged">Ridged</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label for="octaves">Octaves: <span id="octaves-value">4</span></label>
+            <input type="range" id="octaves" min="1" max="12" value="4" step="1">
+        </div>
+
+        <div class="control-group">
+            <label for="persistence">Persistence: <span id="persistence-value">0.85</span></label>
+            <input type="range" id="persistence" min="0.75" max="1.0" value="0.85" step="0.05">
+        </div>
+
+        <div class="control-group">
+            <label for="lacunarity">Lacunarity: <span id="lacunarity-value">1.8</span></label>
+            <input type="range" id="lacunarity" min="1.0" max="4.0" value="1.8" step="0.1">
+        </div>
+
+        <div class="control-group">
+            <label for="zoom">Zoom: <span id="zoom-value">0.4</span></label>
+            <input type="range" id="zoom" min="0.1" max="0.6" value="0.4" step="0.1">
+        </div>
+
+        <h3 style="font-size: 16px; color: #333; margin-bottom: 15px;">Objetos 3D</h3>
+
+        <div class="control-group">
+            <label for="object-select">Escolher Objeto</label>
+            <select id="object-select">
+                <option value="Assets/obj/containers_A.obj">Container</option>
+                <option value="Assets/obj/basemodule_A.obj">Base Module</option>
+                <option value="Assets/obj/rocks_A.obj">Rocks</option>
+                <option value="Assets/obj/rock_A.obj">Rock</option>
+                <option value="Assets/obj/cargo_A.obj">Cargo</option>
+                <option value="Assets/obj/cargo_A_packed.obj">Cargo Packed</option>
+                <option value="Assets/obj/spacetruck_large.obj">Space Truck Large</option>
+                <option value="Assets/obj/spacetruck.obj">Space Truck</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label for="object-scale">Escala do Objeto: <span id="object-scale-value">0.75</span></label>
+            <input type="range" id="object-scale" min="0.50" max="1" value="0.75" step="0.01">
+        </div>
+
+        <button id="place-object">Colocar Objeto</button>
+        <button id="clear-objects">Limpar Objetos</button>
+
+        <h3 style="font-size: 16px; color: #333; margin: 20px 0 15px 0;">Posição da Luz</h3>
+
+        <div class="control-group">
+            <label for="light-x">Luz X: <span id="light-x-value">8.0</span></label>
+            <input type="range" id="light-x" min="-15" max="15" value="8.0" step="0.5">
+        </div>
+
+        <div class="control-group">
+            <label for="light-y">Luz Y: <span id="light-y-value">6.0</span></label>
+            <input type="range" id="light-y" min="-15" max="15" value="6.0" step="0.5">
+        </div>
+
+        <div class="control-group">
+            <label for="light-z">Luz Z: <span id="light-z-value">8.0</span></label>
+            <input type="range" id="light-z" min="-15" max="15" value="8.0" step="0.5">
+        </div>
+
+        <button id="reset-light">Resetar Luz</button>
+    </div>
+
+    <script type="module" src="main.js"></script>
+</body>
+</html>
