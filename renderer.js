@@ -79,7 +79,7 @@ export class Renderer {
         this.depthObjectMatrixLoc = this.gl.getUniformLocation(this.depthObjectProgram, 'u_lightMatrix');
 
         // Posição da luz (fixa no espaço mundial - simula o sol)
-        this.lightPos = [8.0, 6.0, 8.0];
+        this.lightPos = [0.0, 0.0, 15.0];
         this.lightTarget = [0, 0, 0];
         this.lightUp = [0, 1, 0];
 
@@ -468,10 +468,25 @@ export class Renderer {
         this.renderObjects(projectionMatrix, viewMatrix, lightMatrix, planetModelMatrix);
 
         // Desenhar linhas (wireframe) por último para garantir visibilidade
+        // Precisa reconfigurar o programa e texturas após renderObjects
         gl.enable(gl.POLYGON_OFFSET_FILL);
         gl.polygonOffset(1, 1);
-        gl.useProgram(this.program); // Garantir que estamos usando o programa correto
+        gl.useProgram(this.program);
+        
+        // Reconfigurar uniforms e texturas para o wireframe
         gl.uniformMatrix4fv(this.matrixLoc, false, planetMVP);
+        gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_worldMatrix'), false, planetModelMatrix);
+        gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_lightMatrix'), false, lightMatrix);
+        
+        // Reconfigurar texturas
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.noiseTexture);
+        gl.uniform1i(this.textureLoc, 0);
+        
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, this.shadowMap);
+        gl.uniform1i(gl.getUniformLocation(this.program, 'u_shadowMap'), 1);
+        
         gl.uniform1i(this.useColorLoc, true);
         gl.uniform3f(this.colorLoc, 0.0, 0.0, 0.0);
         gl.bindVertexArray(this.vaoLines);

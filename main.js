@@ -100,13 +100,13 @@ function main() {
     });
 
     resetLightButton.addEventListener('click', () => {
-        renderer.setLightPosition(8.0, 6.0, 8.0);
-        lightXInput.value = 8.0;
-        lightYInput.value = 6.0;
-        lightZInput.value = 8.0;
-        lightXValue.textContent = '8.0';
-        lightYValue.textContent = '6.0';
-        lightZValue.textContent = '8.0';
+        renderer.setLightPosition(0.0, 0.0, 15.0);
+        lightXInput.value = 0.0;
+        lightYInput.value = 0.0;
+        lightZInput.value = 15.0;
+        lightXValue.textContent = '0.0';
+        lightYValue.textContent = '0.0';
+        lightZValue.textContent = '15.0';
     });
 
     function animate() {
