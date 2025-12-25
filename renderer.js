@@ -804,6 +804,7 @@ export class Renderer {
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, this.objectTexture);
+        gl.bindTexture(gl.TEXTURE_2D, this.noiseTexture);
         gl.uniform1i(this.objectTextureLoc, 0);
 
         gl.activeTexture(gl.TEXTURE1);

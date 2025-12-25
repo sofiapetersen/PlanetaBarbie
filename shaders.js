@@ -21,7 +21,6 @@ export const depthFragmentShaderSource = glsl`#version 300 es
     out vec4 outColor;
 
     void main() {
-        // WebGL2 escreve automaticamente para gl_FragDepth
         outColor = vec4(1.0);
     }
 `;
@@ -65,8 +64,7 @@ export const objectVertexShaderSource = glsl`#version 300 es
         gl_Position = u_matrix * a_position;
         v_normal = normalize(mat3(u_worldMatrix) * a_normal);
         v_texcoord = a_texcoord;
-        // Usar worldPos para o cálculo de sombra
-        v_lightSpacePos = u_lightMatrix * worldPos;
+        v_lightSpacePos = u_lightMatrix * a_position;
         v_worldPos = worldPos.xyz;
     }
 `;
