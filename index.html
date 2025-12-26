@@ -9,6 +9,11 @@
 <body>
     <canvas id="glcanvas"> </canvas>
 
+    <div id="floating-scale-slider" style="display: none; position: absolute; background: rgba(0, 0, 0, 0.8); padding: 15px; border-radius: 8px; border: 2px solid #4caf50; z-index: 1000;">
+        <label style="color: white; display: block; margin-bottom: 8px; font-size: 14px;">Tamanho: <span id="floating-scale-value" style="color: #4caf50; font-weight: bold;">1.00</span></label>
+        <input type="range" id="floating-scale-input" min="0.20" max="2.0" value="1.0" step="0.05" style="width: 150px;">
+    </div>
+
     <div id="control-panel">
         <h2>Controles do Planeta</h2>
 
@@ -49,9 +54,7 @@
                 <option value="Assets/obj/containers_A.obj">Container</option>
                 <option value="Assets/obj/basemodule_A.obj">Base Module</option>
                 <option value="Assets/obj/rocks_A.obj">Rocks</option>
-                <option value="Assets/obj/rock_A.obj">Rock</option>
                 <option value="Assets/obj/cargo_A.obj">Cargo</option>
-                <option value="Assets/obj/cargo_A_packed.obj">Cargo Packed</option>
                 <option value="Assets/obj/spacetruck_large.obj">Space Truck Large</option>
                 <option value="Assets/obj/spacetruck.obj">Space Truck</option>
             </select>
@@ -64,6 +67,14 @@
 
         <button id="place-object">Colocar Objeto</button>
         <button id="clear-objects">Limpar Objetos</button>
+
+        <div id="selected-object-controls" style="display: none; margin-top: 20px; padding: 15px; background-color: #f0f0f0; border-radius: 5px;">
+            <h3 style="font-size: 16px; color: #333; margin: 0 0 15px 0;">Objeto Selecionado</h3>
+            <div class="control-group">
+                <label for="selected-object-scale">Escala: <span id="selected-object-scale-value">1.00</span></label>
+                <input type="range" id="selected-object-scale" min="0.20" max="2.0" value="1.0" step="0.05">
+            </div>
+        </div>
 
         <h3 style="font-size: 16px; color: #333; margin: 20px 0 15px 0;">Posição da Luz</h3>
 
@@ -83,6 +94,7 @@
         </div>
 
         <button id="reset-light">Resetar Luz</button>
+        <button id="wireframeBtn">Ocultar Malha</button>
     </div>
 
     <script type="module" src="main.js"></script>

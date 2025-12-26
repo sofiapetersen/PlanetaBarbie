@@ -6,7 +6,9 @@ import {
     depthVertexShaderSource,
     depthFragmentShaderSource,
     depthObjectVertexShaderSource,
-    depthObjectFragmentShaderSource
+    depthObjectFragmentShaderSource,
+    pickingObjectVertexShaderSource,
+    pickingObjectFragmentShaderSource
 } from './shaders.js';
 import { createShader, createProgram } from './webgl-utils.js';
 import { createIcosphere, createEdgeIndices } from './geometry.js';
@@ -44,7 +46,7 @@ export class Renderer {
         this.useColorLoc = this.gl.getUniformLocation(this.program, 'u_useColor');
         this.uvLoc = this.gl.getAttribLocation(this.program, 'a_texcoord');
 
-        // Programa para objetos 3D
+        // Programa para objetos
         this.objectProgram = createProgram(
             this.gl,
             createShader(this.gl, this.gl.VERTEX_SHADER, objectVertexShaderSource),
@@ -56,6 +58,7 @@ export class Renderer {
         this.objectUVLoc = this.gl.getAttribLocation(this.objectProgram, 'a_texcoord');
         this.objectMatrixLoc = this.gl.getUniformLocation(this.objectProgram, 'u_matrix');
         this.objectTextureLoc = this.gl.getUniformLocation(this.objectProgram, 'u_texture');
+        this.objectIsSelectedLoc = this.gl.getUniformLocation(this.objectProgram, 'u_isSelected');
 
         // Programa para renderizar depth map do planeta
         this.depthProgram = createProgram(
@@ -77,18 +80,29 @@ export class Renderer {
 
         this.depthObjectPositionLoc = this.gl.getAttribLocation(this.depthObjectProgram, 'a_position');
         this.depthObjectMatrixLoc = this.gl.getUniformLocation(this.depthObjectProgram, 'u_lightMatrix');
+        this.depthObjectWorldMatrixLoc = this.gl.getUniformLocation(this.depthObjectProgram, 'u_worldMatrix');
 
-        // Posição da luz (fixa no espaço mundial - simula o sol)
+        // Programa para picking de objetos
+        this.pickingObjectProgram = createProgram(
+            this.gl,
+            createShader(this.gl, this.gl.VERTEX_SHADER, pickingObjectVertexShaderSource),
+            createShader(this.gl, this.gl.FRAGMENT_SHADER, pickingObjectFragmentShaderSource)
+        );
+
+        this.pickingObjectPositionLoc = this.gl.getAttribLocation(this.pickingObjectProgram, 'a_position');
+        this.pickingObjectMatrixLoc = this.gl.getUniformLocation(this.pickingObjectProgram, 'u_matrix');
+        this.pickingObjectWorldMatrixLoc = this.gl.getUniformLocation(this.pickingObjectProgram, 'u_worldMatrix');
+        this.pickingObjectIdLoc = this.gl.getUniformLocation(this.pickingObjectProgram, 'u_id');
+
         this.lightPos = [0.0, 0.0, 15.0];
         this.lightTarget = [0, 0, 0];
         this.lightUp = [0, 1, 0];
 
-        // Criar geometria do icosaedro (planeta)
         const geometry = createIcosphere(3);
         this.numElements = geometry.indices.length;
         this.numElementsLines = geometry.edgeIndices.length;
 
-        // VAO para triângulos do planeta
+        // Vertex Array Object para triângulos do planeta
         this.vao = this.gl.createVertexArray();
         this.gl.bindVertexArray(this.vao);
         
@@ -103,8 +117,10 @@ export class Renderer {
         const normalBuffer = this.gl.createBuffer();
         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, normalBuffer);
         this.gl.bufferData(this.gl.ARRAY_BUFFER, geometry.normals, this.gl.STATIC_DRAW);
-        this.gl.enableVertexAttribArray(this.normalLoc);
-        this.gl.vertexAttribPointer(this.normalLoc, 3, this.gl.FLOAT, false, 0, 0);
+        if (this.normalLoc !== -1) {
+            this.gl.enableVertexAttribArray(this.normalLoc);
+            this.gl.vertexAttribPointer(this.normalLoc, 3, this.gl.FLOAT, false, 0, 0);
+        }
         
         // Index buffer para triângulos
         const indexBuffer = this.gl.createBuffer();
@@ -120,27 +136,31 @@ export class Renderer {
         
         this.gl.bindVertexArray(null);
 
-        // VAO para linhas do planeta (wireframe)
+        // VAO para wireframe (linhas)
         this.vaoLines = this.gl.createVertexArray();
         this.gl.bindVertexArray(this.vaoLines);
         
-        // Reutilizar os mesmos buffers de posição e normal
+        // Position buffer para linhas
         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, positionBuffer);
         this.gl.enableVertexAttribArray(this.positionLoc);
         this.gl.vertexAttribPointer(this.positionLoc, 3, this.gl.FLOAT, false, 0, 0);
         
+        // Normal buffer para linhas
         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, normalBuffer);
-        this.gl.enableVertexAttribArray(this.normalLoc);
-        this.gl.vertexAttribPointer(this.normalLoc, 3, this.gl.FLOAT, false, 0, 0);
+        if (this.normalLoc !== -1) {
+            this.gl.enableVertexAttribArray(this.normalLoc);
+            this.gl.vertexAttribPointer(this.normalLoc, 3, this.gl.FLOAT, false, 0, 0);
+        }
+        
+        // UV buffer para linhas
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, uvBuffer);
+        this.gl.enableVertexAttribArray(this.uvLoc);
+        this.gl.vertexAttribPointer(this.uvLoc, 2, this.gl.FLOAT, false, 0, 0);
         
         // Index buffer para linhas
         const edgeIndexBuffer = this.gl.createBuffer();
         this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, edgeIndexBuffer);
         this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, geometry.edgeIndices, this.gl.STATIC_DRAW);
-        
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, uvBuffer);
-        this.gl.enableVertexAttribArray(this.uvLoc);
-        this.gl.vertexAttribPointer(this.uvLoc, 2, this.gl.FLOAT, false, 0, 0);
 
         this.gl.bindVertexArray(null);
 
@@ -160,7 +180,7 @@ export class Renderer {
 
         this.gl.bindVertexArray(null);
 
-        // Armazenar buffers para uso posterior
+        // Armazenar buffers
         this.positionBuffer = positionBuffer;
         this.uvBuffer = uvBuffer;
         this.indexBuffer = indexBuffer;
@@ -174,9 +194,20 @@ export class Renderer {
 
         this.setupMouseControls();
 
-        // Criar shadow map framebuffer com resolução maior para sombras mais precisas
+        // Criar shadow map framebuffer 
         this.shadowMapSize = 4096;
         this.createShadowMapFramebuffer();
+
+        // Criar picking framebuffer
+        this.createPickingFramebuffer();
+        // Inicializar o tamanho do picking framebuffer
+        this.resizePickingFramebuffer(this.canvas.width, this.canvas.height);
+
+        // Variáveis para controle de picking
+        this.mouseX = -1;
+        this.mouseY = -1;
+        this.selectedObjectIndex = -1;
+        this.hoveredObjectIndex = -1;
 
         // Inicializar gerador de ruído
         this.noiseGenerator = new NoiseGenerator(512, 512);
@@ -196,9 +227,8 @@ export class Renderer {
         this.objectTexture = null;
         this.loadObjectTexture();
 
-        // Debug da shadow map
-        this.showDebugShadowMap = false;
-        this.debugShadowMapCanvas = null;
+        // Controle do wireframe
+        this.showWireframe = true;
     }
 
     createShadowMapFramebuffer() {
@@ -233,18 +263,57 @@ export class Renderer {
             this.shadowMap,
             0
         );
+    }
 
-        // Desativar cor no framebuffer de profundidade
-        gl.drawBuffers([gl.NONE]);
-        gl.readBuffer(gl.NONE);
+    createPickingFramebuffer() {
+        const gl = this.gl;
 
-        // Verificar se o framebuffer está completo
-        const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
-        if (status !== gl.FRAMEBUFFER_COMPLETE) {
-            console.error('Shadow framebuffer não está completo:', status);
-        }
+        // Criar textura para picking
+        this.pickingTexture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, this.pickingTexture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+        // Criar framebuffer
+        this.pickingFramebuffer = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.pickingFramebuffer);
+
+        // Anexar textura e depth buffer
+        gl.framebufferTexture2D(
+            gl.FRAMEBUFFER,
+            gl.COLOR_ATTACHMENT0,
+            gl.TEXTURE_2D,
+            this.pickingTexture,
+            0
+        );
+        gl.framebufferRenderbuffer(
+            gl.FRAMEBUFFER,
+            gl.DEPTH_ATTACHMENT,
+            gl.RENDERBUFFER,
+            this.pickingDepthBuffer
+        );
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+
+    resizePickingFramebuffer(width, height) {
+        const gl = this.gl;
+
+        gl.bindTexture(gl.TEXTURE_2D, this.pickingTexture);
+        gl.texImage2D(
+            gl.TEXTURE_2D,
+            0,
+            gl.RGBA,
+            width,
+            height,
+            0,
+            gl.RGBA,
+            gl.UNSIGNED_BYTE,
+            null
+        );
+
     }
 
     async loadObjectTexture() {
@@ -280,14 +349,19 @@ export class Renderer {
         });
     }
 
+    // girar o planeta
     setupMouseControls() {
         this.canvas.addEventListener('mousedown', (e) => {
-            this.isDragging = true;
-            this.lastMouseX = e.clientX;
-            this.lastMouseY = e.clientY;
+                this.isDragging = true;
+                this.lastMouseX = e.clientX;
+                this.lastMouseY = e.clientY;
         });
 
         this.canvas.addEventListener('mousemove', (e) => {
+            const rect = this.canvas.getBoundingClientRect();
+            this.mouseX = e.clientX - rect.left;
+            this.mouseY = e.clientY - rect.top;
+
             if (this.isDragging) {
                 const deltaX = e.clientX - this.lastMouseX;
                 const deltaY = e.clientY - this.lastMouseY;
@@ -306,6 +380,26 @@ export class Renderer {
 
         this.canvas.addEventListener('mouseleave', () => {
             this.isDragging = false;
+            this.mouseX = -1;
+            this.mouseY = -1;
+        });
+
+        this.canvas.addEventListener('click', (e) => {
+            if (this.hoveredObjectIndex >= 0) {
+                this.selectedObjectIndex = this.hoveredObjectIndex;
+
+                const event = new CustomEvent('objectSelected', {
+                    detail: {
+                        index: this.selectedObjectIndex,
+                        object: this.placedObjects[this.selectedObjectIndex]
+                    }
+                });
+                this.canvas.dispatchEvent(event);
+            } else {
+                this.selectedObjectIndex = -1;
+                const event = new CustomEvent('objectDeselected');
+                this.canvas.dispatchEvent(event);
+            }
         });
     }
 
@@ -314,9 +408,6 @@ export class Renderer {
 
         const noiseData = this.noiseGenerator.generate(this.noiseParams);
         this.cachedNoiseData = noiseData;
-
-        console.log("Noise data length:", noiseData.length);
-        console.log("First 10 values:", noiseData.slice(0, 10));
         const min = noiseData.reduce((a, b) => Math.min(a, b), Infinity);
         const max = noiseData.reduce((a, b) => Math.max(a, b), -Infinity);
         console.log("Min:", min, "Max:", max);
@@ -359,6 +450,7 @@ export class Renderer {
         this.canvas.width = window.innerWidth;
         this.canvas.height = window.innerHeight;
         this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+        this.resizePickingFramebuffer(this.canvas.width, this.canvas.height);
     }
 
     clearScreen() {
@@ -366,61 +458,118 @@ export class Renderer {
         this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
     }
 
+    renderObjectsPicking(projectionMatrix, viewMatrix, planetModelMatrix) {
+        const gl = this.gl;
+
+        if (this.placedObjects.length === 0) {
+            return;
+        }
+
+        gl.useProgram(this.pickingObjectProgram);
+
+        for (let i = 0; i < this.placedObjects.length; i++) {
+            const obj = this.placedObjects[i];
+            const objectLocalMatrix = this.getObjectModelMatrix(obj);
+
+            const worldMatrix = mat4.create();
+            mat4.multiply(worldMatrix, planetModelMatrix, objectLocalMatrix);
+
+            const mvMatrix = mat4.create();
+            mat4.multiply(mvMatrix, viewMatrix, worldMatrix);
+            const mvpMatrix = mat4.create();
+            mat4.multiply(mvpMatrix, projectionMatrix, mvMatrix);
+
+            const id = i + 1;
+            const idColor = [
+                ((id >> 0) & 0xFF) / 0xFF,
+                ((id >> 8) & 0xFF) / 0xFF,
+                ((id >> 16) & 0xFF) / 0xFF,
+                ((id >> 24) & 0xFF) / 0xFF
+            ];
+
+            gl.uniformMatrix4fv(this.pickingObjectMatrixLoc, false, mvpMatrix);
+            gl.uniformMatrix4fv(this.pickingObjectWorldMatrixLoc, false, worldMatrix);
+            gl.uniform4fv(this.pickingObjectIdLoc, idColor);
+
+            gl.bindVertexArray(obj.model.pickingVao);
+
+            const indexType = obj.model.useUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+            gl.drawElements(gl.TRIANGLES, obj.model.numElements, indexType, 0);
+        }
+
+        gl.bindVertexArray(null);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+    }
+
+    pickObject(projectionMatrix, viewMatrix, planetModelMatrix) {
+        const gl = this.gl;
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.pickingFramebuffer);
+        gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+
+        gl.enable(gl.DEPTH_TEST);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        this.renderObjectsPicking(projectionMatrix, viewMatrix, planetModelMatrix);
+
+        const pixelX = this.mouseX * gl.canvas.width / gl.canvas.clientWidth;
+        const pixelY = gl.canvas.height - this.mouseY * gl.canvas.height / gl.canvas.clientHeight - 1;
+
+        const data = new Uint8Array(4);
+        gl.readPixels(
+            Math.floor(pixelX),
+            Math.floor(pixelY),
+            1,
+            1,
+            gl.RGBA,
+            gl.UNSIGNED_BYTE,
+            data
+        );
+
+        const id = data[0] + (data[1] << 8) + (data[2] << 16) + (data[3] << 24);
+
+        if (id > 0) {
+            this.hoveredObjectIndex = id - 1;
+        } else {
+            this.hoveredObjectIndex = -1;
+        }
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+
     render() {
         const gl = this.gl;
 
-        // Matriz de modelo do planeta (rotação)
         const planetModelMatrix = mat4.create();
         mat4.rotateY(planetModelMatrix, planetModelMatrix, this.rotationY);
         mat4.rotateX(planetModelMatrix, planetModelMatrix, this.rotationX);
 
-        // ===== PASSO 1: Renderizar shadow map =====
-        // Usar projeção ortográfica para sombras mais realistas e consistentes
         const lightProjectionMatrix = mat4.create();
-        const frustumSize = 5.0; // Ajustar para cobrir toda a cena
+        const frustumSize = 5.0; 
         mat4.ortho(lightProjectionMatrix, -frustumSize, frustumSize, -frustumSize, frustumSize, 0.1, 30.0);
 
-        // Criar view matrix da luz usando lookAt
         const lightViewMatrix = mat4.create();
         mat4.lookAt(lightViewMatrix,
-            this.lightPos,    // eye (posição da luz - fixa no mundo)
-            this.lightTarget, // center (alvo da luz - centro do planeta)
-            this.lightUp      // up vector
+            this.lightPos,
+            this.lightTarget,
+            this.lightUp
         );
 
         const lightMatrix = mat4.create();
         mat4.multiply(lightMatrix, lightProjectionMatrix, lightViewMatrix);
 
-        // Matriz completa para shadow map do planeta
         const planetLightMVP = mat4.create();
         mat4.multiply(planetLightMVP, lightMatrix, planetModelMatrix);
 
-        // Configurar viewport para shadow map
         gl.viewport(0, 0, this.shadowMapSize, this.shadowMapSize);
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFramebuffer);
         gl.clear(gl.DEPTH_BUFFER_BIT);
         gl.enable(gl.DEPTH_TEST);
 
-        // Renderizar planeta para shadow map
-        gl.useProgram(this.depthProgram);
-        gl.uniformMatrix4fv(this.depthLightMatrixLoc, false, planetLightMVP);
-
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, this.noiseTexture);
-        gl.uniform1i(gl.getUniformLocation(this.depthProgram, 'u_noiseTexture'), 0);
-
-        gl.bindVertexArray(this.depthVao);
-        gl.drawElements(gl.TRIANGLES, this.numElements, gl.UNSIGNED_SHORT, 0);
-
-        // Renderizar objetos para shadow map
+        // Objetos fazem sombra
         this.renderObjectsDepth(lightMatrix, planetModelMatrix);
 
-        // Opcional: debug da shadow map
-        if (this.showDebugShadowMap) {
-            this.debugShadowMap();
-        }
-
-        // ===== PASSO 2: Renderizar cena normal =====
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.viewport(0, 0, this.canvas.width, this.canvas.height);
         this.clearScreen();
@@ -435,19 +584,20 @@ export class Renderer {
         );
 
         const viewMatrix = mat4.create();
-        const cameraPos = [0, 0, 8]; // Posição da câmera
+        const cameraPos = [0, 0, 8]; 
         mat4.translate(viewMatrix, viewMatrix, [0, 0, -8]);
+
+        this.pickObject(projectionMatrix, viewMatrix, planetModelMatrix);
 
         const planetMVP = mat4.create();
         const planetMV = mat4.create();
         mat4.multiply(planetMV, viewMatrix, planetModelMatrix);
         mat4.multiply(planetMVP, projectionMatrix, planetMV);
 
-        // Renderizar planeta
         gl.useProgram(this.program);
         gl.uniformMatrix4fv(this.matrixLoc, false, planetMVP);
         gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_worldMatrix'), false, planetModelMatrix);
-        // Passar lightMatrix diretamente (já inclui a transformação do planeta)
+
         gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_lightMatrix'), false, lightMatrix);
         gl.uniform3fv(gl.getUniformLocation(this.program, 'u_lightPos'), this.lightPos);
         gl.uniform3fv(gl.getUniformLocation(this.program, 'u_cameraPos'), cameraPos);
@@ -462,97 +612,46 @@ export class Renderer {
 
         gl.uniform1i(this.useColorLoc, false);
         gl.bindVertexArray(this.vao);
-        gl.drawElements(gl.TRIANGLES, this.numElements, gl.UNSIGNED_SHORT, 0);
+        gl.drawElements(gl.TRIANGLES, this.numElements, gl.UNSIGNED_INT, 0);  
 
         // Renderizar objetos
         this.renderObjects(projectionMatrix, viewMatrix, lightMatrix, planetModelMatrix);
 
-        // Desenhar linhas (wireframe) por último para garantir visibilidade
-        // Precisa reconfigurar o programa e texturas após renderObjects
-        gl.enable(gl.POLYGON_OFFSET_FILL);
-        gl.polygonOffset(1, 1);
-        gl.useProgram(this.program);
-        
-        // Reconfigurar uniforms e texturas para o wireframe
-        gl.uniformMatrix4fv(this.matrixLoc, false, planetMVP);
-        gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_worldMatrix'), false, planetModelMatrix);
-        gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_lightMatrix'), false, lightMatrix);
-        
-        // Reconfigurar texturas
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, this.noiseTexture);
-        gl.uniform1i(this.textureLoc, 0);
-        
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, this.shadowMap);
-        gl.uniform1i(gl.getUniformLocation(this.program, 'u_shadowMap'), 1);
-        
-        gl.uniform1i(this.useColorLoc, true);
-        gl.uniform3f(this.colorLoc, 0.0, 0.0, 0.0);
-        gl.bindVertexArray(this.vaoLines);
-        gl.drawElements(gl.LINES, this.numElementsLines, gl.UNSIGNED_SHORT, 0);
-        gl.disable(gl.POLYGON_OFFSET_FILL);
+        if (this.showWireframe) {
+            gl.enable(gl.POLYGON_OFFSET_FILL);
+            gl.polygonOffset(1, 1);
+            gl.useProgram(this.program);
+            
+            gl.uniformMatrix4fv(this.matrixLoc, false, planetMVP);
+            gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_worldMatrix'), false, planetModelMatrix);
+            gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_lightMatrix'), false, lightMatrix);
+            
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, this.noiseTexture);
+            gl.uniform1i(this.textureLoc, 0);
+            
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, this.shadowMap);
+            gl.uniform1i(gl.getUniformLocation(this.program, 'u_shadowMap'), 1);
+            
+            gl.uniform1i(this.useColorLoc, true);
+            gl.uniform3f(this.colorLoc, 0.0, 0.0, 0.0);
+            gl.bindVertexArray(this.vaoLines);
+            gl.drawElements(gl.LINES, this.numElementsLines, gl.UNSIGNED_INT, 0); 
+            gl.disable(gl.POLYGON_OFFSET_FILL);
+        }
 
         this.rotationY += 0.001;
     }
 
-    debugShadowMap() {
-        if (!this.debugShadowMapCanvas) {
-            this.debugShadowMapCanvas = document.createElement('canvas');
-            this.debugShadowMapCanvas.width = 256;
-            this.debugShadowMapCanvas.height = 256;
-            this.debugShadowMapCanvas.style.position = 'fixed';
-            this.debugShadowMapCanvas.style.top = '10px';
-            this.debugShadowMapCanvas.style.right = '10px';
-            this.debugShadowMapCanvas.style.border = '1px solid white';
-            this.debugShadowMapCanvas.style.zIndex = '1000';
-            document.body.appendChild(this.debugShadowMapCanvas);
-        }
-
-        const gl = this.gl;
-        const debugCtx = this.debugShadowMapCanvas.getContext('2d');
-        
-        // Ler dados da shadow map
-        const pixels = new Float32Array(this.shadowMapSize * this.shadowMapSize);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFramebuffer);
-        gl.readPixels(0, 0, this.shadowMapSize, this.shadowMapSize, gl.DEPTH_COMPONENT, gl.FLOAT, pixels);
-        
-        // Desenhar para debug
-        debugCtx.clearRect(0, 0, 256, 256);
-        const imageData = debugCtx.createImageData(256, 256);
-        
-        for (let y = 0; y < 256; y++) {
-            for (let x = 0; x < 256; x++) {
-                const idx = (y * 256 + x) * 4;
-                const srcX = Math.floor(x * this.shadowMapSize / 256);
-                const srcY = Math.floor(y * this.shadowMapSize / 256);
-                const depth = pixels[srcY * this.shadowMapSize + srcX];
-                
-                // Converter profundidade para cor (branco = próximo, preto = distante)
-                const value = Math.floor((1.0 - depth) * 255);
-                imageData.data[idx] = value;     // R
-                imageData.data[idx + 1] = value; // G
-                imageData.data[idx + 2] = value; // B
-                imageData.data[idx + 3] = 255;   // A
-            }
-        }
-        
-        debugCtx.putImageData(imageData, 0, 0);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    }
-
-    toggleDebugShadowMap() {
-        this.showDebugShadowMap = !this.showDebugShadowMap;
-        if (!this.showDebugShadowMap && this.debugShadowMapCanvas) {
-            this.debugShadowMapCanvas.remove();
-            this.debugShadowMapCanvas = null;
-        }
+    toggleWireframe() {
+        this.showWireframe = !this.showWireframe;
+        return this.showWireframe;
     }
 
     updateNoiseTexture() {
         this.cachedNoiseData = null;
         this.createNoiseTexture();
-        // Reposicionar todos os objetos existentes
         this.repositionAllObjects();
     }
 
@@ -560,6 +659,7 @@ export class Renderer {
         this.noiseParams = { ...this.noiseParams, ...params };
     }
 
+    // Carregar objeto
     async loadModel(path) {
         if (this.loadedModels.has(path)) {
             return this.loadedModels.get(path);
@@ -567,6 +667,8 @@ export class Renderer {
 
         const objData = await OBJLoader.load(path);
         const gl = this.gl;
+
+        const stride = 32;
 
         const vertexBuffer = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
@@ -576,48 +678,79 @@ export class Renderer {
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, objData.indices, gl.STATIC_DRAW);
 
-        const stride = 32; // 3 (pos) + 3 (normal) + 2 (uv) = 8 floats * 4 bytes = 32
-
-        // VAO para renderização normal
         const vao = gl.createVertexArray();
         gl.bindVertexArray(vao);
 
         gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-        gl.enableVertexAttribArray(this.objectPositionLoc);
-        gl.vertexAttribPointer(this.objectPositionLoc, 3, gl.FLOAT, false, stride, 0);
-
-        gl.enableVertexAttribArray(this.objectNormalLoc);
-        gl.vertexAttribPointer(this.objectNormalLoc, 3, gl.FLOAT, false, stride, 12);
-
-        gl.enableVertexAttribArray(this.objectUVLoc);
-        gl.vertexAttribPointer(this.objectUVLoc, 2, gl.FLOAT, false, stride, 24);
-
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+
+        if (this.objectPositionLoc !== -1) {
+            gl.enableVertexAttribArray(this.objectPositionLoc);
+            gl.vertexAttribPointer(this.objectPositionLoc, 3, gl.FLOAT, false, stride, 0);
+        } else {
+            console.warn('objectPositionLoc is -1');
+        }
+
+        if (this.objectNormalLoc !== -1) {
+            gl.enableVertexAttribArray(this.objectNormalLoc);
+            gl.vertexAttribPointer(this.objectNormalLoc, 3, gl.FLOAT, false, stride, 12);
+        }
+
+        if (this.objectUVLoc !== -1) {
+            gl.enableVertexAttribArray(this.objectUVLoc);
+            gl.vertexAttribPointer(this.objectUVLoc, 2, gl.FLOAT, false, stride, 24);
+        }
 
         gl.bindVertexArray(null);
 
-        // VAO para depth rendering
         const depthVao = gl.createVertexArray();
         gl.bindVertexArray(depthVao);
 
         gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-        gl.enableVertexAttribArray(this.depthObjectPositionLoc);
-        gl.vertexAttribPointer(this.depthObjectPositionLoc, 3, gl.FLOAT, false, stride, 0);
-
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
 
+        if (this.depthObjectPositionLoc !== -1) {
+            gl.enableVertexAttribArray(this.depthObjectPositionLoc);
+            gl.vertexAttribPointer(this.depthObjectPositionLoc, 3, gl.FLOAT, false, stride, 0);
+        } else {
+            console.warn('depthObjectPositionLoc is -1');
+        }
+
         gl.bindVertexArray(null);
+
+        const pickingVao = gl.createVertexArray();
+        gl.bindVertexArray(pickingVao);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+
+        if (this.pickingObjectPositionLoc !== -1) {
+            gl.enableVertexAttribArray(this.pickingObjectPositionLoc);
+            gl.vertexAttribPointer(this.pickingObjectPositionLoc, 3, gl.FLOAT, false, stride, 0);
+        } else {
+            console.warn('pickingObjectPositionLoc is -1');
+        }
+
+        gl.bindVertexArray(null);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
 
         const model = {
             vao,
             depthVao,
-            numElements: objData.indices.length
+            pickingVao,
+            vertexBuffer,
+            indexBuffer,
+            numElements: objData.indices.length,
+            useUint32: objData.useUint32 
         };
 
         this.loadedModels.set(path, model);
         return model;
     }
 
+    // Pra colocar os objetos na superficie do planeta
     getNoiseValueAtUV(u, v) {
         const texWidth = 512;
         const texHeight = 512;
@@ -630,7 +763,6 @@ export class Renderer {
         u = ((u % 1) + 1) % 1;
         v = ((v % 1) + 1) % 1;
         
-        // Interpolação bilinear para maior precisão
         const x = u * (texWidth - 1);
         const y = v * (texHeight - 1);
         
@@ -642,19 +774,18 @@ export class Renderer {
         const tx = x - x1;
         const ty = y - y1;
         
-        // Valores nos 4 pontos ao redor
         const p11 = this.cachedNoiseData[y1 * texWidth + x1];
         const p21 = this.cachedNoiseData[y1 * texWidth + x2];
         const p12 = this.cachedNoiseData[y2 * texWidth + x1];
         const p22 = this.cachedNoiseData[y2 * texWidth + x2];
         
-        // Interpolação bilinear
         const top = p11 * (1 - tx) + p21 * tx;
         const bottom = p12 * (1 - tx) + p22 * tx;
         
         return top * (1 - ty) + bottom * ty;
     }
 
+    // Calculos de posição dos objetos
     async placeObject(modelPath, scale) {
         const theta = Math.random() * Math.PI * 2;
         const phi = Math.acos(2 * Math.random() - 1);
@@ -708,6 +839,7 @@ export class Renderer {
         this.placedObjects = [];
     }
 
+    // Pra quando mexer no noise
     updateObjectPosition(obj) {
         const noiseValue = this.getNoiseValueAtUV(obj.u, obj.v);
         
@@ -747,20 +879,25 @@ export class Renderer {
         for (const obj of this.placedObjects) {
             const objectLocalMatrix = this.getObjectModelMatrix(obj);
 
-            // Combinar: objeto está no espaço do planeta, planeta está no espaço mundial
             const worldMatrix = mat4.create();
             mat4.multiply(worldMatrix, planetModelMatrix, objectLocalMatrix);
 
-            const lightMVP = mat4.create();
-            mat4.multiply(lightMVP, lightMatrix, worldMatrix);
-
-            gl.uniformMatrix4fv(this.depthObjectMatrixLoc, false, lightMVP);
+            gl.uniformMatrix4fv(this.depthObjectMatrixLoc, false, lightMatrix);
+            gl.uniformMatrix4fv(this.depthObjectWorldMatrixLoc, false, worldMatrix);
 
             gl.bindVertexArray(obj.model.depthVao);
-            gl.drawElements(gl.TRIANGLES, obj.model.numElements, gl.UNSIGNED_SHORT, 0);
+            
+            const indexType = obj.model.useUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+            gl.drawElements(gl.TRIANGLES, obj.model.numElements, indexType, 0);
         }
+        
+        gl.bindVertexArray(null);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
     }
 
+    
+    // Pra colocar os objetos na superficie do planeta
     getObjectModelMatrix(obj) {
         const modelMatrix = mat4.create();
         const normal = obj.normal;
@@ -808,18 +945,16 @@ export class Renderer {
         return modelMatrix;
     }
 
+    // Pra renderizar os objetos
     renderObjects(projectionMatrix, viewMatrix, lightMatrix, planetModelMatrix) {
         const gl = this.gl;
-
-        if (!this.objectTexture || this.placedObjects.length === 0) {
-            return;
-        }
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
         gl.useProgram(this.objectProgram);
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, this.objectTexture);
-        gl.bindTexture(gl.TEXTURE_2D, this.noiseTexture);
         gl.uniform1i(this.objectTextureLoc, 0);
 
         gl.activeTexture(gl.TEXTURE1);
@@ -828,10 +963,16 @@ export class Renderer {
 
         gl.uniform3fv(gl.getUniformLocation(this.objectProgram, 'u_lightPos'), this.lightPos);
 
-        for (const obj of this.placedObjects) {
+        for (let i = 0; i < this.placedObjects.length; i++) {
+            const obj = this.placedObjects[i];
             const objectLocalMatrix = this.getObjectModelMatrix(obj);
 
-            // Combinar: objeto está no espaço do planeta, planeta está no espaço mundial
+            if (i === this.selectedObjectIndex) {
+                mat4.scale(objectLocalMatrix, objectLocalMatrix, [1.15, 1.15, 1.15]);
+            } else if (i === this.hoveredObjectIndex) {
+                mat4.scale(objectLocalMatrix, objectLocalMatrix, [1.08, 1.08, 1.08]);
+            }
+
             const worldMatrix = mat4.create();
             mat4.multiply(worldMatrix, planetModelMatrix, objectLocalMatrix);
 
@@ -840,48 +981,47 @@ export class Renderer {
             const mvpMatrix = mat4.create();
             mat4.multiply(mvpMatrix, projectionMatrix, mvMatrix);
 
-            const lightMVP = mat4.create();
-            mat4.multiply(lightMVP, lightMatrix, worldMatrix);
-
             gl.uniformMatrix4fv(this.objectMatrixLoc, false, mvpMatrix);
             gl.uniformMatrix4fv(gl.getUniformLocation(this.objectProgram, 'u_worldMatrix'), false, worldMatrix);
-            gl.uniformMatrix4fv(gl.getUniformLocation(this.objectProgram, 'u_lightMatrix'), false, lightMVP);
+            gl.uniformMatrix4fv(gl.getUniformLocation(this.objectProgram, 'u_lightMatrix'), false, lightMatrix);
 
-            // Calcular se o objeto está no lado escuro
+            gl.uniform1i(this.objectIsSelectedLoc, i === this.selectedObjectIndex ? 1 : 0);
+
             const lightDir = [
                 this.lightPos[0] - obj.position[0],
                 this.lightPos[1] - obj.position[1],
                 this.lightPos[2] - obj.position[2]
             ];
-            
-            // Normalizar
+
             const len = Math.sqrt(lightDir[0]*lightDir[0] + lightDir[1]*lightDir[1] + lightDir[2]*lightDir[2]);
             const normalizedLightDir = [lightDir[0]/len, lightDir[1]/len, lightDir[2]/len];
             
-            // Produto escalar entre normal do objeto e direção da luz
             const dotProduct = 
                 obj.normal[0] * normalizedLightDir[0] +
                 obj.normal[1] * normalizedLightDir[1] +
                 obj.normal[2] * normalizedLightDir[2];
             
-            // Ajustar iluminação baseado na orientação
-            // Se dotProduct < 0, objeto está no lado escuro
             const shadowFactor = Math.max(0.2, dotProduct * 0.5 + 0.5);
             
-            // Criar uniforme temporário para shadow factor se necessário
             const shadowFactorLoc = gl.getUniformLocation(this.objectProgram, 'u_shadowFactor');
             if (shadowFactorLoc) {
                 gl.uniform1f(shadowFactorLoc, shadowFactor);
             }
 
             gl.bindVertexArray(obj.model.vao);
-            gl.drawElements(gl.TRIANGLES, obj.model.numElements, gl.UNSIGNED_SHORT, 0);
+            
+            const indexType = obj.model.useUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+            gl.drawElements(gl.TRIANGLES, obj.model.numElements, indexType, 0);
         }
-
+        gl.bindVertexArray(null);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
         gl.useProgram(this.program);
+
+        gl.disable(gl.BLEND);
     }
 
-    // Métodos auxiliares para controle da luz
+    // Controle da luz
     setLightPosition(x, y, z) {
         this.lightPos = [x, y, z];
     }
@@ -892,5 +1032,72 @@ export class Renderer {
 
     setLightUp(x, y, z) {
         this.lightUp = [x, y, z];
+    }
+
+    // Controle de objetos selecionados
+    setSelectedObjectScale(scale) {
+        if (this.selectedObjectIndex >= 0 && this.selectedObjectIndex < this.placedObjects.length) {
+            this.placedObjects[this.selectedObjectIndex].scale = scale;
+        }
+    }
+
+    getSelectedObject() {
+        if (this.selectedObjectIndex >= 0 && this.selectedObjectIndex < this.placedObjects.length) {
+            return this.placedObjects[this.selectedObjectIndex];
+        }
+        return null;
+    }
+
+    getSelectedObjectScreenPosition() {
+        if (this.selectedObjectIndex < 0 || this.selectedObjectIndex >= this.placedObjects.length) {
+            return null;
+        }
+
+        const obj = this.placedObjects[this.selectedObjectIndex];
+
+        const planetModelMatrix = mat4.create();
+        mat4.rotateY(planetModelMatrix, planetModelMatrix, this.rotationY);
+        mat4.rotateX(planetModelMatrix, planetModelMatrix, this.rotationX);
+
+        const objectLocalMatrix = this.getObjectModelMatrix(obj);
+        const worldMatrix = mat4.create();
+        mat4.multiply(worldMatrix, planetModelMatrix, objectLocalMatrix);
+
+        const viewMatrix = mat4.create();
+        mat4.translate(viewMatrix, viewMatrix, [0, 0, -8]);
+
+        const projectionMatrix = mat4.create();
+        mat4.perspective(
+            projectionMatrix,
+            Math.PI / 4,
+            this.canvas.width / this.canvas.height,
+            0.1,
+            100.0
+        );
+
+        const worldPos = [worldMatrix[12], worldMatrix[13], worldMatrix[14], 1.0];
+
+        const viewPos = [0, 0, 0, 0];
+        for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 4; j++) {
+                viewPos[i] += viewMatrix[j * 4 + i] * worldPos[j];
+            }
+        }
+
+        const clipPos = [0, 0, 0, 0];
+        for (let i = 0; i < 4; i++) {
+            for (let j = 0; j < 4; j++) {
+                clipPos[i] += projectionMatrix[j * 4 + i] * viewPos[j];
+            }
+        }
+
+        if (clipPos[3] === 0) return null;
+        const ndcX = clipPos[0] / clipPos[3];
+        const ndcY = clipPos[1] / clipPos[3];
+
+        const screenX = (ndcX * 0.5 + 0.5) * this.canvas.width;
+        const screenY = (1 - (ndcY * 0.5 + 0.5)) * this.canvas.height;
+
+        return { x: screenX, y: screenY };
     }
 }

@@ -87,7 +87,7 @@ function createIcosphere(subdivisions = 2) {
     return {
         positions:   new Float32Array(positions),
         normals:     new Float32Array(positions),
-        indices:     new Uint16Array(indices),
+        indices:     new Uint32Array(indices),
         uvs:         new Float32Array(uvs),
         edgeIndices: edgeIndices
     };
@@ -116,7 +116,7 @@ function createEdgeIndices(triangleIndices) {
         edgeIndices.push(v0, v1);
     });
     
-    return new Uint16Array(edgeIndices);
+    return new Uint32Array(edgeIndices);
 }
 
 export { createIcosphere, createEdgeIndices };
