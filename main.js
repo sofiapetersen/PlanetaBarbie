@@ -115,6 +115,15 @@ function main() {
             isVisible ? 'Ocultar Malha' : 'Mostrar Malha';
     });
 
+    // Zoom controls
+    document.getElementById('zoom-in').addEventListener('click', () => {
+        renderer.zoomIn();
+    });
+
+    document.getElementById('zoom-out').addEventListener('click', () => {
+        renderer.zoomOut();
+    });
+
     const selectedObjectControls = document.getElementById('selected-object-controls');
     const selectedObjectScaleInput = document.getElementById('selected-object-scale');
     const selectedObjectScaleValue = document.getElementById('selected-object-scale-value');

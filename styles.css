@@ -161,3 +161,66 @@ canvas {
 #clear-objects:active {
   background-color: #ff1493;
 }
+
+#zoom-controls {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 1000;
+}
+
+#zoom-controls button {
+  width: 50px;
+  height: 50px;
+  font-size: 20px;
+  border: none;
+  border-radius: 8px;
+  background-color: rgba(255, 105, 180, 0.9);
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#zoom-controls button:hover {
+  background-color: rgba(255, 20, 147, 0.95);
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+#zoom-controls button:active {
+  background-color: rgba(199, 21, 133, 1);
+  transform: scale(0.98);
+}
+
+#reset-light,
+#wireframeBtn {
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  margin-bottom: 8px;
+  background-color: #ffb6d9;
+  color: #333;
+}
+
+#reset-light:hover,
+#wireframeBtn:hover {
+  background-color: #ff69b4;
+  color: white;
+}
+
+#reset-light:active,
+#wireframeBtn:active {
+  background-color: #ff1493;
+}

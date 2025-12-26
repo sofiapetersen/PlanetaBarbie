@@ -8,7 +8,9 @@ import {
     depthObjectVertexShaderSource,
     depthObjectFragmentShaderSource,
     pickingObjectVertexShaderSource,
-    pickingObjectFragmentShaderSource
+    pickingObjectFragmentShaderSource,
+    starVertexShaderSource,
+    starFragmentShaderSource
 } from './shaders.js';
 import { createShader, createProgram } from './webgl-utils.js';
 import { createIcosphere, createEdgeIndices } from './geometry.js';
@@ -93,6 +95,16 @@ export class Renderer {
         this.pickingObjectMatrixLoc = this.gl.getUniformLocation(this.pickingObjectProgram, 'u_matrix');
         this.pickingObjectWorldMatrixLoc = this.gl.getUniformLocation(this.pickingObjectProgram, 'u_worldMatrix');
         this.pickingObjectIdLoc = this.gl.getUniformLocation(this.pickingObjectProgram, 'u_id');
+
+        // Programa para estrelas
+        this.starProgram = createProgram(
+            this.gl,
+            createShader(this.gl, this.gl.VERTEX_SHADER, starVertexShaderSource),
+            createShader(this.gl, this.gl.FRAGMENT_SHADER, starFragmentShaderSource)
+        );
+
+        this.starPositionLoc = this.gl.getAttribLocation(this.starProgram, 'a_position');
+        this.initStars();
 
         this.lightPos = [0.0, 0.0, 15.0];
         this.lightTarget = [0, 0, 0];
@@ -229,6 +241,46 @@ export class Renderer {
 
         // Controle do wireframe
         this.showWireframe = true;
+
+        // Zoom da câmera
+        this.cameraDistance = 8.0;
+    }
+
+    initStars() {
+        const gl = this.gl;
+        const numStars = 1000;
+        const starPositions = new Float32Array(numStars * 2);
+
+        for (let i = 0; i < numStars; i++) {
+            starPositions[i * 2] = (Math.random() * 2 - 1);
+            starPositions[i * 2 + 1] = (Math.random() * 2 - 1);
+        }
+
+        this.numStars = numStars;
+        this.starVao = gl.createVertexArray();
+        gl.bindVertexArray(this.starVao);
+
+        const starBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, starBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, starPositions, gl.STATIC_DRAW);
+
+        gl.enableVertexAttribArray(this.starPositionLoc);
+        gl.vertexAttribPointer(this.starPositionLoc, 2, gl.FLOAT, false, 0, 0);
+
+        gl.bindVertexArray(null);
+    }
+
+    renderStars() {
+        const gl = this.gl;
+
+        gl.disable(gl.DEPTH_TEST);
+        gl.useProgram(this.starProgram);
+        gl.bindVertexArray(this.starVao);
+
+        gl.drawArrays(gl.POINTS, 0, this.numStars);
+
+        gl.bindVertexArray(null);
+        gl.enable(gl.DEPTH_TEST);
     }
 
     createShadowMapFramebuffer() {
@@ -574,6 +626,9 @@ export class Renderer {
         gl.viewport(0, 0, this.canvas.width, this.canvas.height);
         this.clearScreen();
 
+        // Renderizar estrelas no fundo
+        this.renderStars();
+
         const projectionMatrix = mat4.create();
         mat4.perspective(
             projectionMatrix,
@@ -584,8 +639,8 @@ export class Renderer {
         );
 
         const viewMatrix = mat4.create();
-        const cameraPos = [0, 0, 8]; 
-        mat4.translate(viewMatrix, viewMatrix, [0, 0, -8]);
+        const cameraPos = [0, 0, this.cameraDistance];
+        mat4.translate(viewMatrix, viewMatrix, [0, 0, -this.cameraDistance]);
 
         this.pickObject(projectionMatrix, viewMatrix, planetModelMatrix);
 
@@ -1064,7 +1119,7 @@ export class Renderer {
         mat4.multiply(worldMatrix, planetModelMatrix, objectLocalMatrix);
 
         const viewMatrix = mat4.create();
-        mat4.translate(viewMatrix, viewMatrix, [0, 0, -8]);
+        mat4.translate(viewMatrix, viewMatrix, [0, 0, -this.cameraDistance]);
 
         const projectionMatrix = mat4.create();
         mat4.perspective(
@@ -1099,5 +1154,13 @@ export class Renderer {
         const screenY = (1 - (ndcY * 0.5 + 0.5)) * this.canvas.height;
 
         return { x: screenX, y: screenY };
+    }
+
+    zoomIn() {
+        this.cameraDistance = Math.max(3.0, this.cameraDistance - 0.5);
+    }
+
+    zoomOut() {
+        this.cameraDistance = Math.min(20.0, this.cameraDistance + 0.5);
     }
 }

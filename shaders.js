@@ -295,3 +295,26 @@ export const pickingObjectFragmentShaderSource = glsl`#version 300 es
         outColor = u_id;
     }
 `;
+
+export const starVertexShaderSource = glsl`#version 300 es
+    in vec2 a_position;
+
+    void main() {
+        gl_Position = vec4(a_position, 0.0, 1.0);
+        gl_PointSize = 2.0;
+    }
+`;
+
+export const starFragmentShaderSource = glsl`#version 300 es
+    precision highp float;
+
+    out vec4 outColor;
+
+    void main() {
+        float dist = length(gl_PointCoord - vec2(0.5));
+        if (dist > 0.5) discard;
+
+        float brightness = 1.0 - dist * 2.0;
+        outColor = vec4(vec3(brightness), 1.0);
+    }
+`;
