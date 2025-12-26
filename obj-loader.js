@@ -1,8 +1,24 @@
 export class OBJLoader {
     static async load(url) {
-        const response = await fetch(url);
-        const text = await response.text();
-        return this.parse(text);
+        try {
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const text = await response.text();
+            if (!text || text.length === 0) {
+                throw new Error('Empty response from server');
+            }
+            console.log(`OBJLoader: Loaded ${text.length} bytes from ${url}`);
+            return this.parse(text);
+        } catch (error) {
+            console.error(`OBJLoader: Failed to load ${url}:`, error);
+            return {
+                vertices: new Float64Array([]),
+                indices: new Uint32Array([]),
+                useUint32: true
+            };
+        }
     }
 
     static parse(text) {
@@ -85,9 +101,12 @@ export class OBJLoader {
             }
         }
 
+        console.log(`OBJLoader: ${indexList.length} indices, ${vertices.length / 8} vertices`);
+        
         return {
             vertices: new Float32Array(vertices),
-            indices: new Uint16Array(indexList)
+            indices: new Uint32Array(indexList),
+            useUint32: true 
         };
     }
 }

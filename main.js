@@ -109,8 +109,79 @@ function main() {
         lightZValue.textContent = '15.0';
     });
 
+    document.getElementById('wireframeBtn').addEventListener('click', () => {
+        const isVisible = renderer.toggleWireframe();
+        document.getElementById('wireframeBtn').textContent =
+            isVisible ? 'Ocultar Malha' : 'Mostrar Malha';
+    });
+
+    const selectedObjectControls = document.getElementById('selected-object-controls');
+    const selectedObjectScaleInput = document.getElementById('selected-object-scale');
+    const selectedObjectScaleValue = document.getElementById('selected-object-scale-value');
+
+    selectedObjectScaleInput.addEventListener('input', (e) => {
+        const scale = parseFloat(e.target.value);
+        selectedObjectScaleValue.textContent = scale.toFixed(2);
+        renderer.setSelectedObjectScale(scale);
+    });
+
+    const floatingSlider = document.getElementById('floating-scale-slider');
+    const floatingScaleInput = document.getElementById('floating-scale-input');
+    const floatingScaleValue = document.getElementById('floating-scale-value');
+
+    floatingScaleInput.addEventListener('input', (e) => {
+        const scale = parseFloat(e.target.value);
+        floatingScaleValue.textContent = scale.toFixed(2);
+        renderer.setSelectedObjectScale(scale);
+    });
+
+    canvas.addEventListener('objectSelected', (e) => {
+        const obj = e.detail.object;
+
+        floatingSlider.style.display = 'block';
+        floatingScaleInput.value = obj.scale;
+        floatingScaleValue.textContent = obj.scale.toFixed(2);
+    });
+
+    canvas.addEventListener('objectDeselected', () => {
+        floatingSlider.style.display = 'none';
+    });
+
+
+    canvas.style.cursor = 'grab';
+    let lastHoveredIndex = -1;
+
+    function updateCursor() {
+        if (renderer.hoveredObjectIndex >= 0) {
+            canvas.style.cursor = 'pointer';
+            if (lastHoveredIndex !== renderer.hoveredObjectIndex) {
+                lastHoveredIndex = renderer.hoveredObjectIndex;
+            }
+        } else {
+            if (renderer.isDragging) {
+                canvas.style.cursor = 'grabbing';
+            } else {
+                canvas.style.cursor = 'grab';
+            }
+            lastHoveredIndex = -1;
+        }
+    }
+
+    function updateFloatingSliderPosition() {
+        if (floatingSlider.style.display === 'block') {
+            const screenPos = renderer.getSelectedObjectScreenPosition();
+            if (screenPos) {
+                const rect = canvas.getBoundingClientRect();
+                floatingSlider.style.left = (rect.left + screenPos.x + 30) + 'px';
+                floatingSlider.style.top = (rect.top + screenPos.y - 30) + 'px';
+            }
+        }
+    }
+
     function animate() {
         renderer.render();
+        updateCursor();
+        updateFloatingSliderPosition();
         requestAnimationFrame(animate);
     }
 

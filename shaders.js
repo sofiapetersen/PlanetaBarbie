@@ -29,9 +29,11 @@ export const depthObjectVertexShaderSource = glsl`#version 300 es
     in vec4 a_position;
 
     uniform mat4 u_lightMatrix;
+    uniform mat4 u_worldMatrix;
 
     void main() {
-        gl_Position = u_lightMatrix * a_position;
+        vec4 worldPos = u_worldMatrix * a_position;
+        gl_Position = u_lightMatrix * worldPos;
     }
 `;
 
@@ -64,7 +66,7 @@ export const objectVertexShaderSource = glsl`#version 300 es
         gl_Position = u_matrix * a_position;
         v_normal = normalize(mat3(u_worldMatrix) * a_normal);
         v_texcoord = a_texcoord;
-        v_lightSpacePos = u_lightMatrix * a_position;
+        v_lightSpacePos = u_lightMatrix * worldPos;
         v_worldPos = worldPos.xyz;
     }
 `;
@@ -80,6 +82,7 @@ export const objectFragmentShaderSource = glsl`#version 300 es
     uniform sampler2D u_texture;
     uniform sampler2D u_shadowMap;
     uniform vec3 u_lightPos;
+    uniform bool u_isSelected;
 
     out vec4 outColor;
 
@@ -129,7 +132,14 @@ export const objectFragmentShaderSource = glsl`#version 300 es
 
         vec3 lighting = ambient + shadow * diffuse;
 
-        outColor = vec4(lighting, texColor.a);
+        // Verde mangueira em objeto selecionado
+        if (u_isSelected) {
+            vec3 greenTint = vec3(0.2, 0.8, 0.3);
+            lighting = mix(lighting, greenTint, 0.5);
+            outColor = vec4(lighting, 0.7);
+        } else {
+            outColor = vec4(lighting, texColor.a);
+        }
     }
 `;
 
@@ -239,26 +249,49 @@ export const fragmentShaderSource = glsl`#version 300 es
                 shadow = calculateShadow(v_lightSpacePos, normal, lightDir);
             }
 
-            float terminatorSoftness = 0.25; 
+            float terminatorSoftness = 0.25;
             float terminatorStart = -0.15;
             float terminatorEnd = terminatorStart + terminatorSoftness;
             float lightIntensity = smoothstep(terminatorStart, terminatorEnd, NdotL);
 
             vec3 skyColor = vec3(0.05, 0.05, 0.08); // Azul muito escuro do espaço
-            float hemisphereLight = NdotL * 0.5 + 0.5; 
+            float hemisphereLight = NdotL * 0.5 + 0.5;
             vec3 ambient = mix(skyColor, vec3(0.2), hemisphereLight) * color;
 
             float diff = max(NdotL, 0.0);
-            vec3 diffuse = diff * color * 1.2; 
+            vec3 diffuse = diff * color * 1.2;
 
             vec3 viewDir = normalize(u_cameraPos - v_worldPos);
             float rimDot = 1.0 - max(dot(viewDir, normal), 0.0);
             float rimIntensity = pow(rimDot, 3.0) * max(NdotL, 0.0) * 0.3;
-            vec3 rimColor = vec3(1.0, 0.95, 0.9) * rimIntensity; 
+            vec3 rimColor = vec3(1.0, 0.95, 0.9) * rimIntensity;
 
             vec3 lighting = ambient + (diffuse * shadow * lightIntensity) + rimColor;
 
             outColor = vec4(lighting, 1.0);
         }
+    }
+`;
+
+export const pickingObjectVertexShaderSource = glsl`#version 300 es
+    in vec4 a_position;
+
+    uniform mat4 u_matrix;
+    uniform mat4 u_worldMatrix;
+
+    void main() {
+        gl_Position = u_matrix * a_position;
+    }
+`;
+
+export const pickingObjectFragmentShaderSource = glsl`#version 300 es
+    precision highp float;
+
+    uniform vec4 u_id;
+
+    out vec4 outColor;
+
+    void main() {
+        outColor = u_id;
     }
 `;
