@@ -243,7 +243,7 @@ export class Renderer {
         this.showWireframe = true;
 
         // Zoom da câmera
-        this.cameraDistance = 8.0;
+        this.cameraDistance = 5.5;
     }
 
     initStars() {

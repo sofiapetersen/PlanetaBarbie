@@ -80,7 +80,6 @@ function main() {
         renderer.clearObjects();
     });
 
-    // Light position controls
     lightXInput.addEventListener('input', (e) => {
         const value = parseFloat(e.target.value);
         lightXValue.textContent = value.toFixed(1);
@@ -115,7 +114,6 @@ function main() {
             isVisible ? 'Ocultar Malha' : 'Mostrar Malha';
     });
 
-    // Zoom controls
     document.getElementById('zoom-in').addEventListener('click', () => {
         renderer.zoomIn();
     });
