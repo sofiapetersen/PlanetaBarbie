@@ -104,6 +104,8 @@ export class Renderer {
         );
 
         this.starPositionLoc = this.gl.getAttribLocation(this.starProgram, 'a_position');
+        this.starSizeLoc = this.gl.getAttribLocation(this.starProgram, 'a_size');
+        this.starViewProjectionMatrixLoc = this.gl.getUniformLocation(this.starProgram, 'u_viewProjectionMatrix');
         this.initStars();
 
         this.lightPos = [0.0, 0.0, 15.0];
@@ -248,12 +250,26 @@ export class Renderer {
 
     initStars() {
         const gl = this.gl;
-        const numStars = 1000;
-        const starPositions = new Float32Array(numStars * 2);
+        const numStars = 2000;
+        const starData = new Float32Array(numStars * 4); // 3 para posição + 1 para tamanho
 
         for (let i = 0; i < numStars; i++) {
-            starPositions[i * 2] = (Math.random() * 2 - 1);
-            starPositions[i * 2 + 1] = (Math.random() * 2 - 1);
+            // Distribuição esférica uniforme
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            const radius = 15 + Math.random() * 20; // Estrelas entre 15 e 35 unidades de distância
+
+            const x = radius * Math.sin(phi) * Math.cos(theta);
+            const y = radius * Math.sin(phi) * Math.sin(theta);
+            const z = radius * Math.cos(phi);
+
+            // Tamanho variado para as estrelas
+            const size = 1.5 + Math.random() * 2.5;
+
+            starData[i * 4] = x;
+            starData[i * 4 + 1] = y;
+            starData[i * 4 + 2] = z;
+            starData[i * 4 + 3] = size;
         }
 
         this.numStars = numStars;
@@ -262,20 +278,27 @@ export class Renderer {
 
         const starBuffer = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, starBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, starPositions, gl.STATIC_DRAW);
+        gl.bufferData(gl.ARRAY_BUFFER, starData, gl.STATIC_DRAW);
 
+        // Posição (xyz)
         gl.enableVertexAttribArray(this.starPositionLoc);
-        gl.vertexAttribPointer(this.starPositionLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.vertexAttribPointer(this.starPositionLoc, 3, gl.FLOAT, false, 16, 0);
+
+        // Tamanho
+        gl.enableVertexAttribArray(this.starSizeLoc);
+        gl.vertexAttribPointer(this.starSizeLoc, 1, gl.FLOAT, false, 16, 12);
 
         gl.bindVertexArray(null);
     }
 
-    renderStars() {
+    renderStars(viewProjectionMatrix) {
         const gl = this.gl;
 
         gl.disable(gl.DEPTH_TEST);
         gl.useProgram(this.starProgram);
         gl.bindVertexArray(this.starVao);
+
+        gl.uniformMatrix4fv(this.starViewProjectionMatrixLoc, false, viewProjectionMatrix);
 
         gl.drawArrays(gl.POINTS, 0, this.numStars);
 
@@ -626,9 +649,6 @@ export class Renderer {
         gl.viewport(0, 0, this.canvas.width, this.canvas.height);
         this.clearScreen();
 
-        // Renderizar estrelas no fundo
-        this.renderStars();
-
         const projectionMatrix = mat4.create();
         mat4.perspective(
             projectionMatrix,
@@ -641,6 +661,12 @@ export class Renderer {
         const viewMatrix = mat4.create();
         const cameraPos = [0, 0, this.cameraDistance];
         mat4.translate(viewMatrix, viewMatrix, [0, 0, -this.cameraDistance]);
+
+        const viewProjectionMatrix = mat4.create();
+        mat4.multiply(viewProjectionMatrix, projectionMatrix, viewMatrix);
+
+        // Renderizar estrelas no fundo
+        this.renderStars(viewProjectionMatrix);
 
         this.pickObject(projectionMatrix, viewMatrix, planetModelMatrix);
 

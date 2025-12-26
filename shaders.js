@@ -297,24 +297,40 @@ export const pickingObjectFragmentShaderSource = glsl`#version 300 es
 `;
 
 export const starVertexShaderSource = glsl`#version 300 es
-    in vec2 a_position;
+    in vec3 a_position;
+    in float a_size;
+
+    uniform mat4 u_viewProjectionMatrix;
+
+    out float v_brightness;
 
     void main() {
-        gl_Position = vec4(a_position, 0.0, 1.0);
-        gl_PointSize = 2.0;
+        gl_Position = u_viewProjectionMatrix * vec4(a_position, 1.0);
+        gl_PointSize = a_size;
+        v_brightness = a_size / 3.0;
     }
 `;
 
 export const starFragmentShaderSource = glsl`#version 300 es
     precision highp float;
 
+    in float v_brightness;
     out vec4 outColor;
 
     void main() {
         float dist = length(gl_PointCoord - vec2(0.5));
         if (dist > 0.5) discard;
 
-        float brightness = 1.0 - dist * 2.0;
-        outColor = vec4(vec3(brightness), 1.0);
+        float brightness = (1.0 - dist * 2.0) * v_brightness;
+
+        vec3 starColor = vec3(1.0);
+        float colorVariation = fract(v_brightness * 123.456);
+        if (colorVariation > 0.95) {
+            starColor = vec3(1.0, 0.9, 0.95); // Rosa muito claro
+        } else if (colorVariation > 0.90) {
+            starColor = vec3(0.95, 0.95, 1.0); // Azul muito claro
+        }
+
+        outColor = vec4(starColor * brightness, 1.0);
     }
 `;
