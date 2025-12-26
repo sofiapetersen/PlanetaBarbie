@@ -122,6 +122,11 @@ function main() {
         renderer.zoomOut();
     });
 
+    document.getElementById('toggle-panel').addEventListener('click', () => {
+        const panel = document.getElementById('control-panel');
+        panel.classList.toggle('collapsed');
+    });
+
     const selectedObjectControls = document.getElementById('selected-object-controls');
     const selectedObjectScaleInput = document.getElementById('selected-object-scale');
     const selectedObjectScaleValue = document.getElementById('selected-object-scale-value');

@@ -19,8 +19,10 @@
         <input type="range" id="floating-scale-input" min="0.20" max="2.0" value="1.0" step="0.05" style="width: 150px;">
     </div>
 
-    <div id="control-panel">
-        <h2>Controles do Planeta</h2>
+    <div id="control-panel" class="collapsed">
+        <button id="toggle-panel" class="toggle-button">◀</button>
+        <div class="panel-content">
+            <h2>Controles do Planeta</h2>
 
         <div class="control-group">
             <label for="noise-type">Tipo de Noise</label>
@@ -100,6 +102,7 @@
 
         <button id="reset-light">Resetar Luz</button>
         <button id="wireframeBtn">Ocultar Malha</button>
+        </div>
     </div>
 
     <script type="module" src="main.js"></script>
