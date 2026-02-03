@@ -701,6 +701,7 @@ export class Renderer {
         if (this.showWireframe) {
             gl.enable(gl.POLYGON_OFFSET_FILL);
             gl.polygonOffset(1, 1);
+            gl.disable(gl.BLEND);
             gl.useProgram(this.program);
             
             gl.uniformMatrix4fv(this.matrixLoc, false, planetMVP);
@@ -718,8 +719,9 @@ export class Renderer {
             gl.uniform1i(this.useColorLoc, true);
             gl.uniform3f(this.colorLoc, 0.0, 0.0, 0.0);
             gl.bindVertexArray(this.vaoLines);
-            gl.drawElements(gl.LINES, this.numElementsLines, gl.UNSIGNED_INT, 0); 
+            gl.drawElements(gl.LINES, this.numElementsLines, gl.UNSIGNED_INT, 0);
             gl.disable(gl.POLYGON_OFFSET_FILL);
+            gl.bindVertexArray(null);
         }
 
         this.rotationY += 0.001;
