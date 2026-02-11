@@ -168,6 +168,7 @@ canvas {
 }
 
 #place-object,
+#add-object,
 #clear-objects {
   width: 100%;
   padding: 10px;
@@ -180,17 +181,25 @@ canvas {
   margin-bottom: 8px;
 }
 
-#place-object {
+#place-object,
+#add-object {
   background-color: #ff69b4;
   color: white;
 }
 
-#place-object:hover {
+#place-object:hover,
+#add-object:hover {
   background-color: #ff1493;
 }
 
-#place-object:active {
+#place-object:active,
+#add-object:active {
   background-color: #c71585;
+}
+
+#add-object.active-mode {
+  background-color: #c71585;
+  box-shadow: 0 0 8px rgba(199, 21, 133, 0.6);
 }
 
 #clear-objects {
@@ -268,4 +277,36 @@ canvas {
 #reset-light:active,
 #wireframeBtn:active {
   background-color: #ff1493;
+}
+
+.terrain-edit-buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 15px;
+}
+
+.terrain-btn {
+  flex: 1;
+  padding: 10px 8px;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  background-color: #ff69b4;
+  color: white;
+}
+
+.terrain-btn:hover {
+  background-color: #ff1493;
+}
+
+.terrain-btn:active {
+  background-color: #c71585;
+}
+
+.terrain-btn.active-mode {
+  background-color: #c71585;
+  box-shadow: 0 0 8px rgba(199, 21, 133, 0.6);
 }

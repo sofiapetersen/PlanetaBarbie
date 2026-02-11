@@ -39,18 +39,52 @@
         </div>
 
         <div class="control-group">
-            <label for="persistence">Persistence: <span id="persistence-value">0.85</span></label>
-            <input type="range" id="persistence" min="0.75" max="1.0" value="0.85" step="0.05">
+            <label for="persistence">Persistence: <span id="persistence-value">0.5</span></label>
+            <input type="range" id="persistence" min="0.30" max="1.0" value="0.5" step="0.05">
         </div>
 
         <div class="control-group">
-            <label for="lacunarity">Lacunarity: <span id="lacunarity-value">1.8</span></label>
-            <input type="range" id="lacunarity" min="1.0" max="4.0" value="1.8" step="0.1">
+            <label for="lacunarity">Lacunarity: <span id="lacunarity-value">2.0</span></label>
+            <input type="range" id="lacunarity" min="1.0" max="4.0" value="2.0" step="0.1">
         </div>
 
         <div class="control-group">
-            <label for="zoom">Zoom: <span id="zoom-value">0.4</span></label>
-            <input type="range" id="zoom" min="0.1" max="0.6" value="0.4" step="0.1">
+            <label for="zoom">Zoom: <span id="zoom-value">0.5</span></label>
+            <input type="range" id="zoom" min="0.1" max="0.6" value="0.5" step="0.1">
+        </div>
+
+        <div class="control-group">
+            <label for="noise-scale">Amplitude: <span id="noise-scale-value">2.0</span></label>
+            <input type="range" id="noise-scale" min="0.5" max="3.0" value="2.0" step="0.1">
+        </div>
+
+        <h3 style="font-size: 16px; color: #333; margin: 20px 0 15px 0;">Terreno</h3>
+
+        <div class="control-group">
+            <label for="sea-level">Nível do Mar: <span id="sea-level-value">0.30</span></label>
+            <input type="range" id="sea-level" min="0.05" max="0.40" value="0.30" step="0.01">
+        </div>
+
+        <div class="control-group">
+            <label for="sand-range">Largura da Areia: <span id="sand-range-value">0.04</span></label>
+            <input type="range" id="sand-range" min="0.01" max="0.10" value="0.04" step="0.01">
+        </div>
+
+        <h3 style="font-size: 16px; color: #333; margin: 20px 0 15px 0;">Editar Relevo</h3>
+
+        <div class="terrain-edit-buttons">
+            <button id="raise-terrain" class="terrain-btn">Aumentar Terreno</button>
+            <button id="lower-terrain" class="terrain-btn">Diminuir Terreno</button>
+        </div>
+
+        <div class="control-group">
+            <label for="brush-radius">Raio do Pincel: <span id="brush-radius-value">15</span></label>
+            <input type="range" id="brush-radius" min="3" max="50" value="15" step="1">
+        </div>
+
+        <div class="control-group">
+            <label for="brush-strength">Força do Pincel: <span id="brush-strength-value">0.02</span></label>
+            <input type="range" id="brush-strength" min="0.01" max="0.05" value="0.02" step="0.01">
         </div>
 
         <h3 style="font-size: 16px; color: #333; margin-bottom: 15px;">Objetos 3D</h3>
@@ -72,7 +106,8 @@
             <input type="range" id="object-scale" min="0.50" max="1" value="0.75" step="0.01">
         </div>
 
-        <button id="place-object">Colocar Objeto</button>
+        <button id="place-object">Gerar Objeto</button>
+        <button id="add-object">Adicionar Objeto</button>
         <button id="clear-objects">Limpar Objetos</button>
 
         <div id="selected-object-controls" style="display: none; margin-top: 20px; padding: 15px; background-color: #f0f0f0; border-radius: 5px;">

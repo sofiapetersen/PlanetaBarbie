@@ -25,6 +25,7 @@ function main() {
     const objectScaleInput = document.getElementById('object-scale');
     const objectScaleValue = document.getElementById('object-scale-value');
     const placeObjectButton = document.getElementById('place-object');
+    const addObjectButton = document.getElementById('add-object');
     const clearObjectsButton = document.getElementById('clear-objects');
 
     const lightXInput = document.getElementById('light-x');
@@ -65,6 +66,74 @@ function main() {
         renderer.updateNoiseTexture();
     });
 
+    const noiseScaleInput = document.getElementById('noise-scale');
+    const noiseScaleValue = document.getElementById('noise-scale-value');
+
+    noiseScaleInput.addEventListener('input', (e) => {
+        noiseScaleValue.textContent = parseFloat(e.target.value).toFixed(1);
+        renderer.setNoiseParams({ noiseScale: parseFloat(e.target.value) });
+        renderer.updateNoiseTexture();
+    });
+
+    const seaLevelInput = document.getElementById('sea-level');
+    const seaLevelValue = document.getElementById('sea-level-value');
+    const sandRangeInput = document.getElementById('sand-range');
+    const sandRangeValue = document.getElementById('sand-range-value');
+
+    seaLevelInput.addEventListener('input', (e) => {
+        const value = parseFloat(e.target.value);
+        seaLevelValue.textContent = value.toFixed(2);
+        renderer.setSeaLevel(value);
+    });
+
+    sandRangeInput.addEventListener('input', (e) => {
+        const value = parseFloat(e.target.value);
+        sandRangeValue.textContent = value.toFixed(2);
+        renderer.setSandRange(value);
+    });
+
+    // --- Edição de terreno ---
+    const raiseTerrainBtn = document.getElementById('raise-terrain');
+    const lowerTerrainBtn = document.getElementById('lower-terrain');
+    const brushRadiusInput = document.getElementById('brush-radius');
+    const brushRadiusValue = document.getElementById('brush-radius-value');
+    const brushStrengthInput = document.getElementById('brush-strength');
+    const brushStrengthValue = document.getElementById('brush-strength-value');
+
+    raiseTerrainBtn.addEventListener('click', () => {
+        if (renderer.editMode === 'raise') {
+            renderer.exitEditMode();
+        } else {
+            renderer.enterEditMode('raise');
+        }
+    });
+
+    lowerTerrainBtn.addEventListener('click', () => {
+        if (renderer.editMode === 'lower') {
+            renderer.exitEditMode();
+        } else {
+            renderer.enterEditMode('lower');
+        }
+    });
+
+    brushRadiusInput.addEventListener('input', (e) => {
+        brushRadiusValue.textContent = e.target.value;
+        renderer.setBrushRadius(parseInt(e.target.value));
+    });
+
+    brushStrengthInput.addEventListener('input', (e) => {
+        brushStrengthValue.textContent = parseFloat(e.target.value).toFixed(2);
+        renderer.setBrushStrength(parseFloat(e.target.value));
+    });
+
+    // Atualizar visual dos botões de edição quando o modo muda
+    canvas.addEventListener('editModeChanged', (e) => {
+        const mode = e.detail.mode;
+        raiseTerrainBtn.classList.toggle('active-mode', mode === 'raise');
+        lowerTerrainBtn.classList.toggle('active-mode', mode === 'lower');
+        raiseTerrainBtn.textContent = mode === 'raise' ? 'Cancelar Elevação' : 'Aumentar Terreno';
+        lowerTerrainBtn.textContent = mode === 'lower' ? 'Cancelar Rebaixo' : 'Diminuir Terreno';
+    });
 
     objectScaleInput.addEventListener('input', (e) => {
         objectScaleValue.textContent = parseFloat(e.target.value).toFixed(2);
@@ -76,8 +145,38 @@ function main() {
         await renderer.placeObject(selectedModel, scale);
     });
 
+    addObjectButton.addEventListener('click', () => {
+        if (renderer.isAddMode) {
+            // Clicou de novo no botão: cancela o modo de adição
+            renderer.exitAddMode();
+        } else {
+            const selectedModel = objectSelect.value;
+            const scale = parseFloat(objectScaleInput.value);
+            renderer.enterAddMode(selectedModel, scale);
+        }
+    });
+
     clearObjectsButton.addEventListener('click', () => {
         renderer.clearObjects();
+    });
+
+    // Tecla Escape cancela modo de adição ou edição de terreno
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            if (renderer.isAddMode) renderer.exitAddMode();
+            if (renderer.editMode !== 'none') renderer.exitEditMode();
+        }
+    });
+
+    // Atualizar visual do botão quando o modo de adição muda
+    canvas.addEventListener('addModeChanged', (e) => {
+        if (e.detail.active) {
+            addObjectButton.textContent = 'Cancelar Adição';
+            addObjectButton.classList.add('active-mode');
+        } else {
+            addObjectButton.textContent = 'Adicionar Objeto';
+            addObjectButton.classList.remove('active-mode');
+        }
     });
 
     lightXInput.addEventListener('input', (e) => {
@@ -164,6 +263,24 @@ function main() {
     let lastHoveredIndex = -1;
 
     function updateCursor() {
+        // Modo de edição de terreno: cursor crosshair
+        if (renderer.editMode !== 'none') {
+            canvas.style.cursor = 'crosshair';
+            return;
+        }
+
+        // Modo de adição: cursor crosshair
+        if (renderer.isAddMode) {
+            canvas.style.cursor = 'crosshair';
+            return;
+        }
+
+        // Arrastando objeto: cursor move
+        if (renderer.isObjectDragging) {
+            canvas.style.cursor = 'move';
+            return;
+        }
+
         if (renderer.hoveredObjectIndex >= 0) {
             canvas.style.cursor = 'pointer';
             if (lastHoveredIndex !== renderer.hoveredObjectIndex) {

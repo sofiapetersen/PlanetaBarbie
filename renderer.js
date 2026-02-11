@@ -10,13 +10,16 @@ import {
     pickingObjectVertexShaderSource,
     pickingObjectFragmentShaderSource,
     starVertexShaderSource,
-    starFragmentShaderSource
+    starFragmentShaderSource,
+    waterVertexShaderSource,
+    waterFragmentShaderSource
 } from './shaders.js';
 import { createShader, createProgram } from './webgl-utils.js';
-import { createIcosphere, createEdgeIndices } from './geometry.js';
-import { mat4 } from './math-utils.js'
+import { mat4 } from './math-utils.js';
 import { NoiseGenerator } from './noise.js';
 import { OBJLoader } from './obj-loader.js';
+import { getFace, cubeFaceToSphereDir, sphereDirToFace, NUM_FACES, projectDirToFace, getAdjacency } from './cube-sphere.js';
+import { generateWaterMesh } from './water-mesh.js';
 
 export class Renderer {
 
@@ -34,7 +37,6 @@ export class Renderer {
         this.gl.enable(this.gl.DEPTH_TEST);
         this.gl.enable(this.gl.CULL_FACE);
 
-        // Programa principal para o planeta
         this.program = createProgram(
             this.gl,
             createShader(this.gl, this.gl.VERTEX_SHADER, vertexShaderSource),
@@ -43,10 +45,12 @@ export class Renderer {
 
         this.positionLoc = this.gl.getAttribLocation(this.program, 'a_position');
         this.normalLoc = this.gl.getAttribLocation(this.program, 'a_normal');
+        this.heightLoc = this.gl.getAttribLocation(this.program, 'a_height');
         this.matrixLoc = this.gl.getUniformLocation(this.program, 'u_matrix');
         this.colorLoc = this.gl.getUniformLocation(this.program, 'u_color');
         this.useColorLoc = this.gl.getUniformLocation(this.program, 'u_useColor');
-        this.uvLoc = this.gl.getAttribLocation(this.program, 'a_texcoord');
+        this.seaLevelLoc = this.gl.getUniformLocation(this.program, 'u_seaLevel');
+        this.sandRangeLoc = this.gl.getUniformLocation(this.program, 'u_sandRange');
 
         // Programa para objetos
         this.objectProgram = createProgram(
@@ -62,7 +66,7 @@ export class Renderer {
         this.objectTextureLoc = this.gl.getUniformLocation(this.objectProgram, 'u_texture');
         this.objectIsSelectedLoc = this.gl.getUniformLocation(this.objectProgram, 'u_isSelected');
 
-        // Programa para renderizar depth map do planeta
+        // Programa para depth map do terreno
         this.depthProgram = createProgram(
             this.gl,
             createShader(this.gl, this.gl.VERTEX_SHADER, depthVertexShaderSource),
@@ -70,10 +74,10 @@ export class Renderer {
         );
 
         this.depthPositionLoc = this.gl.getAttribLocation(this.depthProgram, 'a_position');
-        this.depthTexcoordLoc = this.gl.getAttribLocation(this.depthProgram, 'a_texcoord');
         this.depthLightMatrixLoc = this.gl.getUniformLocation(this.depthProgram, 'u_lightMatrix');
+        this.depthWorldMatrixLoc = this.gl.getUniformLocation(this.depthProgram, 'u_worldMatrix');
 
-        // Programa para renderizar depth map dos objetos
+        // Programa para depth map dos objetos
         this.depthObjectProgram = createProgram(
             this.gl,
             createShader(this.gl, this.gl.VERTEX_SHADER, depthObjectVertexShaderSource),
@@ -96,6 +100,18 @@ export class Renderer {
         this.pickingObjectWorldMatrixLoc = this.gl.getUniformLocation(this.pickingObjectProgram, 'u_worldMatrix');
         this.pickingObjectIdLoc = this.gl.getUniformLocation(this.pickingObjectProgram, 'u_id');
 
+        // Programa para agua
+        this.waterProgram = createProgram(
+            this.gl,
+            createShader(this.gl, this.gl.VERTEX_SHADER, waterVertexShaderSource),
+            createShader(this.gl, this.gl.FRAGMENT_SHADER, waterFragmentShaderSource)
+        );
+
+        this.waterPositionLoc = this.gl.getAttribLocation(this.waterProgram, 'a_position');
+        this.waterNormalLoc = this.gl.getAttribLocation(this.waterProgram, 'a_normal');
+        this.waterMatrixLoc = this.gl.getUniformLocation(this.waterProgram, 'u_matrix');
+        this.waterTimeLoc = this.gl.getUniformLocation(this.waterProgram, 'u_time');
+
         // Programa para estrelas
         this.starProgram = createProgram(
             this.gl,
@@ -112,164 +128,385 @@ export class Renderer {
         this.lightTarget = [0, 0, 0];
         this.lightUp = [0, 1, 0];
 
-        const geometry = createIcosphere(3);
-        this.numElements = geometry.indices.length;
-        this.numElementsLines = geometry.edgeIndices.length;
-
-        // Vertex Array Object para triângulos do planeta
-        this.vao = this.gl.createVertexArray();
-        this.gl.bindVertexArray(this.vao);
         
-        // Position buffer
-        const positionBuffer = this.gl.createBuffer();
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, positionBuffer);
-        this.gl.bufferData(this.gl.ARRAY_BUFFER, geometry.positions, this.gl.STATIC_DRAW);
-        this.gl.enableVertexAttribArray(this.positionLoc);
-        this.gl.vertexAttribPointer(this.positionLoc, 3, this.gl.FLOAT, false, 0, 0);
+        // Noise e terreno
         
-        // Normal buffer
-        const normalBuffer = this.gl.createBuffer();
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, normalBuffer);
-        this.gl.bufferData(this.gl.ARRAY_BUFFER, geometry.normals, this.gl.STATIC_DRAW);
-        if (this.normalLoc !== -1) {
-            this.gl.enableVertexAttribArray(this.normalLoc);
-            this.gl.vertexAttribPointer(this.normalLoc, 3, this.gl.FLOAT, false, 0, 0);
-        }
+        this.noiseGenerator = new NoiseGenerator(512, 512);
+        this.noiseParams = {
+            octaves: 4,
+            persistence: 0.5,
+            lacunarity: 2.0,
+            noiseZoom: 0.5,
+            noiseType: 'perlin',
+            noiseScale: 2.0
+        };
+
+        // Heightmap data por face (cache CPU)
+        this.heightmapResolution = 129;
+        this.heightmapData = [];
+        this.terrainGridSize = 48;
+
+        // Terrain GPU resources
+        this.terrainVao = null;
+        this.terrainPosBuffer = null;
+        this.terrainNormBuffer = null;
+        this.terrainHeightBuffer = null;
+        this.terrainIdxBuffer = null;
+        this.terrainEdgeBuffer = null;
+        this.terrainNumIndices = 0;
+        this.terrainNumEdgeIndices = 0;
+
+        // Inicializar sistema de terreno
+        this.initTerrainSystem();
+
         
-        // Index buffer para triângulos
-        const indexBuffer = this.gl.createBuffer();
-        this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-        this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, geometry.indices, this.gl.STATIC_DRAW);
-
-        // UV buffer
-        const uvBuffer = this.gl.createBuffer();
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, uvBuffer);
-        this.gl.bufferData(this.gl.ARRAY_BUFFER, geometry.uvs, this.gl.STATIC_DRAW);
-        this.gl.enableVertexAttribArray(this.uvLoc);
-        this.gl.vertexAttribPointer(this.uvLoc, 2, this.gl.FLOAT, false, 0, 0);
+        // Agua
         
-        this.gl.bindVertexArray(null);
+        this.seaLevel = 0.30;
+        this.sandRange = 0.04;
+        this.waterVao = null;
+        this.waterNumElements = 0;
+        this.time = 0;
+        this.initWaterMesh();
 
-        // VAO para wireframe (linhas)
-        this.vaoLines = this.gl.createVertexArray();
-        this.gl.bindVertexArray(this.vaoLines);
         
-        // Position buffer para linhas
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, positionBuffer);
-        this.gl.enableVertexAttribArray(this.positionLoc);
-        this.gl.vertexAttribPointer(this.positionLoc, 3, this.gl.FLOAT, false, 0, 0);
+        // Controles de rotacao e camera
         
-        // Normal buffer para linhas
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, normalBuffer);
-        if (this.normalLoc !== -1) {
-            this.gl.enableVertexAttribArray(this.normalLoc);
-            this.gl.vertexAttribPointer(this.normalLoc, 3, this.gl.FLOAT, false, 0, 0);
-        }
-        
-        // UV buffer para linhas
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, uvBuffer);
-        this.gl.enableVertexAttribArray(this.uvLoc);
-        this.gl.vertexAttribPointer(this.uvLoc, 2, this.gl.FLOAT, false, 0, 0);
-        
-        // Index buffer para linhas
-        const edgeIndexBuffer = this.gl.createBuffer();
-        this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, edgeIndexBuffer);
-        this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, geometry.edgeIndices, this.gl.STATIC_DRAW);
-
-        this.gl.bindVertexArray(null);
-
-        // VAO para depth rendering do planeta
-        this.depthVao = this.gl.createVertexArray();
-        this.gl.bindVertexArray(this.depthVao);
-
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, positionBuffer);
-        this.gl.enableVertexAttribArray(this.depthPositionLoc);
-        this.gl.vertexAttribPointer(this.depthPositionLoc, 3, this.gl.FLOAT, false, 0, 0);
-
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, uvBuffer);
-        this.gl.enableVertexAttribArray(this.depthTexcoordLoc);
-        this.gl.vertexAttribPointer(this.depthTexcoordLoc, 2, this.gl.FLOAT, false, 0, 0);
-
-        this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-
-        this.gl.bindVertexArray(null);
-
-        // Armazenar buffers
-        this.positionBuffer = positionBuffer;
-        this.uvBuffer = uvBuffer;
-        this.indexBuffer = indexBuffer;
-
-        // Controles de rotação
         this.rotationX = 0;
         this.rotationY = 0;
         this.isDragging = false;
         this.lastMouseX = 0;
         this.lastMouseY = 0;
+        this.cameraDistance = 5.5;
+        this.showWireframe = true;
 
         this.setupMouseControls();
 
-        // Criar shadow map framebuffer 
+        
+        // Shadow map
+        
         this.shadowMapSize = 4096;
         this.createShadowMapFramebuffer();
 
-        // Criar picking framebuffer
+        
+        // Picking
+        
         this.createPickingFramebuffer();
-        // Inicializar o tamanho do picking framebuffer
         this.resizePickingFramebuffer(this.canvas.width, this.canvas.height);
-
-        // Variáveis para controle de picking
         this.mouseX = -1;
         this.mouseY = -1;
         this.selectedObjectIndex = -1;
         this.hoveredObjectIndex = -1;
 
-        // Inicializar gerador de ruído
-        this.noiseGenerator = new NoiseGenerator(512, 512);
-        this.noiseParams = {
-            octaves: 4,
-            persistence: 0.45,
-            lacunarity: 1.8,
-            noiseZoom: 0.4,
-            noiseType: 'perlin'
-        };
-        this.createNoiseTexture();
-
-        // Inicializar objetos
+        
+        // Objetos
+        
         this.placedObjects = [];
         this.loadedModels = new Map();
-        this.cachedNoiseData = null;
         this.objectTexture = null;
         this.loadObjectTexture();
 
-        // Controle do wireframe
-        this.showWireframe = true;
+        // Estado de arraste de objetos
+        this.isObjectDragging = false;
+        this.draggedObjectIndex = -1;
+        this.didMoveObject = false;
+        this.dragStartX = 0;
+        this.dragStartY = 0;
 
-        // Zoom da câmera
-        this.cameraDistance = 5.5;
+        // Modo de adicao
+        this.isAddMode = false;
+        this.addModeModelPath = '';
+        this.addModeScale = 1.0;
+
+        // Modo de edicao de terreno
+        this.editMode = 'none';
+        this.brushRadius = 15;
+        this.brushStrength = 0.02;
+        this.isTerrainEditing = false;
     }
+
+    
+    // TERRAIN SYSTEM
+    
+
+    initTerrainSystem() {
+        this.generateHeightmaps();
+        this.buildTerrainMesh();
+    }
+
+    generateHeightmaps() {
+        const res = this.heightmapResolution;
+        this.heightmapData = [];
+        for (let f = 0; f < NUM_FACES; f++) {
+            this.heightmapData.push(
+                this.noiseGenerator.generateFaceHeightmap(f, res, this.noiseParams)
+            );
+        }
+    }
+
+    sampleHeightFromCache(faceId, s, t) {
+        const res = this.heightmapResolution;
+        const data = this.heightmapData[faceId];
+        if (!data) return 0.5;
+
+        // Converter (s,t) de [-1,+1] para [0, res-1]
+        const fx = (s + 1) / 2 * (res - 1);
+        const fy = (t + 1) / 2 * (res - 1);
+
+        const x0 = Math.max(0, Math.min(res - 2, Math.floor(fx)));
+        const y0 = Math.max(0, Math.min(res - 2, Math.floor(fy)));
+        const x1 = x0 + 1;
+        const y1 = y0 + 1;
+
+        const tx = fx - x0;
+        const ty = fy - y0;
+
+        const h00 = data[y0 * res + x0];
+        const h10 = data[y0 * res + x1];
+        const h01 = data[y1 * res + x0];
+        const h11 = data[y1 * res + x1];
+
+        // Interpolacao bilinear
+        const top = h00 * (1 - tx) + h10 * tx;
+        const bottom = h01 * (1 - tx) + h11 * tx;
+        return top * (1 - ty) + bottom * ty;
+    }
+
+    buildTerrainMesh() {
+        const gl = this.gl;
+        const G = this.terrainGridSize;
+        const vertsPerFace = (G + 1) * (G + 1);
+        const totalVerts = vertsPerFace * NUM_FACES;
+        const trisPerFace = G * G * 2;
+
+        const positions = new Float32Array(totalVerts * 3);
+        const normals = new Float32Array(totalVerts * 3);
+        const heights = new Float32Array(totalVerts);
+        const indices = new Uint32Array(trisPerFace * 3 * NUM_FACES);
+
+        let vertOffset = 0;
+        let idxOffset = 0;
+
+        for (let f = 0; f < NUM_FACES; f++) {
+            const face = getFace(f);
+            const baseVert = vertOffset;
+
+            for (let ty = 0; ty <= G; ty++) {
+                const t = -1 + 2 * ty / G;
+                for (let sx = 0; sx <= G; sx++) {
+                    const s = -1 + 2 * sx / G;
+
+                    const dir = cubeFaceToSphereDir(face, s, t);
+                    const h = this.sampleHeightFromCache(f, s, t);
+
+                    const smoothNoise = Math.pow(h, 1.2);
+                    const displacement = smoothNoise * 1.8;
+                    const radius = 1.0 + displacement;
+
+                    const vi = vertOffset * 3;
+                    positions[vi] = dir[0] * radius;
+                    positions[vi + 1] = dir[1] * radius;
+                    positions[vi + 2] = dir[2] * radius;
+                    heights[vertOffset] = smoothNoise;
+                    vertOffset++;
+                }
+            }
+
+            // Verificar se face precisa de flip no winding (right x up deve apontar na direcao da normal)
+            const cx = face.right[1] * face.up[2] - face.right[2] * face.up[1];
+            const cy = face.right[2] * face.up[0] - face.right[0] * face.up[2];
+            const cz = face.right[0] * face.up[1] - face.right[1] * face.up[0];
+            const flipWinding = (cx * face.normal[0] + cy * face.normal[1] + cz * face.normal[2]) < 0;
+
+            for (let ty = 0; ty < G; ty++) {
+                for (let sx = 0; sx < G; sx++) {
+                    const i00 = baseVert + ty * (G + 1) + sx;
+                    const i10 = i00 + 1;
+                    const i01 = i00 + (G + 1);
+                    const i11 = i01 + 1;
+
+                    if (flipWinding) {
+                        indices[idxOffset++] = i00;
+                        indices[idxOffset++] = i01;
+                        indices[idxOffset++] = i10;
+                        indices[idxOffset++] = i10;
+                        indices[idxOffset++] = i01;
+                        indices[idxOffset++] = i11;
+                    } else {
+                        indices[idxOffset++] = i00;
+                        indices[idxOffset++] = i10;
+                        indices[idxOffset++] = i01;
+                        indices[idxOffset++] = i10;
+                        indices[idxOffset++] = i11;
+                        indices[idxOffset++] = i01;
+                    }
+                }
+            }
+        }
+
+        // Normais: acumular normais dos triangulos nos vertices
+        for (let i = 0; i < indices.length; i += 3) {
+            const i0 = indices[i], i1 = indices[i + 1], i2 = indices[i + 2];
+            const ax = positions[i1 * 3] - positions[i0 * 3];
+            const ay = positions[i1 * 3 + 1] - positions[i0 * 3 + 1];
+            const az = positions[i1 * 3 + 2] - positions[i0 * 3 + 2];
+            const bx = positions[i2 * 3] - positions[i0 * 3];
+            const by = positions[i2 * 3 + 1] - positions[i0 * 3 + 1];
+            const bz = positions[i2 * 3 + 2] - positions[i0 * 3 + 2];
+            const nx = ay * bz - az * by;
+            const ny = az * bx - ax * bz;
+            const nz = ax * by - ay * bx;
+            normals[i0 * 3] += nx; normals[i0 * 3 + 1] += ny; normals[i0 * 3 + 2] += nz;
+            normals[i1 * 3] += nx; normals[i1 * 3 + 1] += ny; normals[i1 * 3 + 2] += nz;
+            normals[i2 * 3] += nx; normals[i2 * 3 + 1] += ny; normals[i2 * 3 + 2] += nz;
+        }
+        for (let i = 0; i < totalVerts; i++) {
+            const nx = normals[i * 3], ny = normals[i * 3 + 1], nz = normals[i * 3 + 2];
+            const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+            if (len > 0) {
+                normals[i * 3] /= len;
+                normals[i * 3 + 1] /= len;
+                normals[i * 3 + 2] /= len;
+            }
+        }
+
+        // Edge indices para wireframe (linhas do grid + diagonais dos triangulos)
+        const edgesPerFace = 2 * (G + 1) * G + G * G;
+        const totalEdgeIndices = NUM_FACES * edgesPerFace * 2;
+        const edgeIndices = new Uint32Array(totalEdgeIndices);
+        let ei = 0;
+        for (let f = 0; f < NUM_FACES; f++) {
+            const base = f * vertsPerFace;
+            // Arestas horizontais
+            for (let ty = 0; ty <= G; ty++) {
+                for (let sx = 0; sx < G; sx++) {
+                    edgeIndices[ei++] = base + ty * (G + 1) + sx;
+                    edgeIndices[ei++] = base + ty * (G + 1) + sx + 1;
+                }
+            }
+            // Arestas verticais
+            for (let sx = 0; sx <= G; sx++) {
+                for (let ty = 0; ty < G; ty++) {
+                    edgeIndices[ei++] = base + ty * (G + 1) + sx;
+                    edgeIndices[ei++] = base + (ty + 1) * (G + 1) + sx;
+                }
+            }
+            // Diagonais dos triangulos (i10 -> i01)
+            for (let ty = 0; ty < G; ty++) {
+                for (let sx = 0; sx < G; sx++) {
+                    edgeIndices[ei++] = base + ty * (G + 1) + sx + 1;
+                    edgeIndices[ei++] = base + (ty + 1) * (G + 1) + sx;
+                }
+            }
+        }
+
+        // Upload para GPU
+        if (!this.terrainVao) this.terrainVao = gl.createVertexArray();
+        gl.bindVertexArray(this.terrainVao);
+
+        if (!this.terrainPosBuffer) this.terrainPosBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainPosBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW);
+        if (this.positionLoc !== -1) {
+            gl.enableVertexAttribArray(this.positionLoc);
+            gl.vertexAttribPointer(this.positionLoc, 3, gl.FLOAT, false, 0, 0);
+        }
+
+        if (!this.terrainNormBuffer) this.terrainNormBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainNormBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, normals, gl.DYNAMIC_DRAW);
+        if (this.normalLoc !== -1) {
+            gl.enableVertexAttribArray(this.normalLoc);
+            gl.vertexAttribPointer(this.normalLoc, 3, gl.FLOAT, false, 0, 0);
+        }
+
+        if (!this.terrainHeightBuffer) this.terrainHeightBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.terrainHeightBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, heights, gl.DYNAMIC_DRAW);
+        if (this.heightLoc !== -1) {
+            gl.enableVertexAttribArray(this.heightLoc);
+            gl.vertexAttribPointer(this.heightLoc, 1, gl.FLOAT, false, 0, 0);
+        }
+
+        if (!this.terrainIdxBuffer) this.terrainIdxBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.terrainIdxBuffer);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.DYNAMIC_DRAW);
+        this.terrainNumIndices = indices.length;
+
+        gl.bindVertexArray(null);
+
+        if (!this.terrainEdgeBuffer) this.terrainEdgeBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.terrainEdgeBuffer);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, edgeIndices, gl.DYNAMIC_DRAW);
+        this.terrainNumEdgeIndices = ei;
+
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    }
+
+    
+    // WATER MESH
+    
+
+    initWaterMesh() {
+        const gl = this.gl;
+        const waterData = generateWaterMesh(this.seaLevel, 32);
+
+        if (this.waterVao) {
+            gl.deleteVertexArray(this.waterVao);
+        }
+
+        this.waterVao = gl.createVertexArray();
+        gl.bindVertexArray(this.waterVao);
+
+        // Position buffer
+        const posBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, waterData.positions, gl.STATIC_DRAW);
+        if (this.waterPositionLoc !== -1) {
+            gl.enableVertexAttribArray(this.waterPositionLoc);
+            gl.vertexAttribPointer(this.waterPositionLoc, 3, gl.FLOAT, false, 0, 0);
+        }
+
+        // Normal buffer
+        const normBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, normBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, waterData.normals, gl.STATIC_DRAW);
+        if (this.waterNormalLoc !== -1) {
+            gl.enableVertexAttribArray(this.waterNormalLoc);
+            gl.vertexAttribPointer(this.waterNormalLoc, 3, gl.FLOAT, false, 0, 0);
+        }
+
+        // Index buffer
+        const idxBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuffer);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, waterData.indices, gl.STATIC_DRAW);
+
+        this.waterNumElements = waterData.indices.length;
+
+        gl.bindVertexArray(null);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+    }
+
+    
+    // STARS
+    
 
     initStars() {
         const gl = this.gl;
         const numStars = 2000;
-        const starData = new Float32Array(numStars * 4); // 3 para posição + 1 para tamanho
+        const starData = new Float32Array(numStars * 4);
 
         for (let i = 0; i < numStars; i++) {
-            // Distribuição esférica uniforme
             const theta = Math.random() * Math.PI * 2;
             const phi = Math.acos(2 * Math.random() - 1);
-            const radius = 15 + Math.random() * 20; // Estrelas entre 15 e 35 unidades de distância
+            const radius = 15 + Math.random() * 20;
 
-            const x = radius * Math.sin(phi) * Math.cos(theta);
-            const y = radius * Math.sin(phi) * Math.sin(theta);
-            const z = radius * Math.cos(phi);
-
-            // Tamanho variado para as estrelas
-            const size = 1.5 + Math.random() * 2.5;
-
-            starData[i * 4] = x;
-            starData[i * 4 + 1] = y;
-            starData[i * 4 + 2] = z;
-            starData[i * 4 + 3] = size;
+            starData[i * 4] = radius * Math.sin(phi) * Math.cos(theta);
+            starData[i * 4 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+            starData[i * 4 + 2] = radius * Math.cos(phi);
+            starData[i * 4 + 3] = 1.5 + Math.random() * 2.5;
         }
 
         this.numStars = numStars;
@@ -280,11 +517,8 @@ export class Renderer {
         gl.bindBuffer(gl.ARRAY_BUFFER, starBuffer);
         gl.bufferData(gl.ARRAY_BUFFER, starData, gl.STATIC_DRAW);
 
-        // Posição (xyz)
         gl.enableVertexAttribArray(this.starPositionLoc);
         gl.vertexAttribPointer(this.starPositionLoc, 3, gl.FLOAT, false, 16, 0);
-
-        // Tamanho
         gl.enableVertexAttribArray(this.starSizeLoc);
         gl.vertexAttribPointer(this.starSizeLoc, 1, gl.FLOAT, false, 16, 12);
 
@@ -293,57 +527,44 @@ export class Renderer {
 
     renderStars(viewProjectionMatrix) {
         const gl = this.gl;
-
         gl.disable(gl.DEPTH_TEST);
         gl.useProgram(this.starProgram);
         gl.bindVertexArray(this.starVao);
-
         gl.uniformMatrix4fv(this.starViewProjectionMatrixLoc, false, viewProjectionMatrix);
-
         gl.drawArrays(gl.POINTS, 0, this.numStars);
-
         gl.bindVertexArray(null);
         gl.enable(gl.DEPTH_TEST);
     }
 
+    
+    // SHADOW MAP
+    
+
     createShadowMapFramebuffer() {
         const gl = this.gl;
 
-        // Criar depth texture
         this.shadowMap = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, this.shadowMap);
-        gl.texImage2D(
-            gl.TEXTURE_2D,
-            0,
-            gl.DEPTH_COMPONENT32F,
-            this.shadowMapSize,
-            this.shadowMapSize,
-            0,
-            gl.DEPTH_COMPONENT,
-            gl.FLOAT,
-            null
-        );
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT32F,
+            this.shadowMapSize, this.shadowMapSize, 0,
+            gl.DEPTH_COMPONENT, gl.FLOAT, null);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-        // Criar framebuffer
         this.shadowFramebuffer = gl.createFramebuffer();
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFramebuffer);
-        gl.framebufferTexture2D(
-            gl.FRAMEBUFFER,
-            gl.DEPTH_ATTACHMENT,
-            gl.TEXTURE_2D,
-            this.shadowMap,
-            0
-        );
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.shadowMap, 0);
     }
+
+    
+    // PICKING
+    
 
     createPickingFramebuffer() {
         const gl = this.gl;
 
-        // Criar textura para picking
         this.pickingTexture = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, this.pickingTexture);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -351,25 +572,13 @@ export class Renderer {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-        // Criar framebuffer
+        // Depth renderbuffer para picking
+        this.pickingDepthBuffer = gl.createRenderbuffer();
+
         this.pickingFramebuffer = gl.createFramebuffer();
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.pickingFramebuffer);
-
-        // Anexar textura e depth buffer
-        gl.framebufferTexture2D(
-            gl.FRAMEBUFFER,
-            gl.COLOR_ATTACHMENT0,
-            gl.TEXTURE_2D,
-            this.pickingTexture,
-            0
-        );
-        gl.framebufferRenderbuffer(
-            gl.FRAMEBUFFER,
-            gl.DEPTH_ATTACHMENT,
-            gl.RENDERBUFFER,
-            this.pickingDepthBuffer
-        );
-
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.pickingTexture, 0);
+        gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, this.pickingDepthBuffer);
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
 
@@ -377,19 +586,15 @@ export class Renderer {
         const gl = this.gl;
 
         gl.bindTexture(gl.TEXTURE_2D, this.pickingTexture);
-        gl.texImage2D(
-            gl.TEXTURE_2D,
-            0,
-            gl.RGBA,
-            width,
-            height,
-            0,
-            gl.RGBA,
-            gl.UNSIGNED_BYTE,
-            null
-        );
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
 
+        gl.bindRenderbuffer(gl.RENDERBUFFER, this.pickingDepthBuffer);
+        gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, width, height);
     }
+
+    
+    // OBJECT TEXTURE
+    
 
     async loadObjectTexture() {
         const gl = this.gl;
@@ -399,37 +604,56 @@ export class Renderer {
             image.onload = () => {
                 this.objectTexture = gl.createTexture();
                 gl.bindTexture(gl.TEXTURE_2D, this.objectTexture);
-
-                gl.texImage2D(
-                    gl.TEXTURE_2D,
-                    0,
-                    gl.RGBA,
-                    gl.RGBA,
-                    gl.UNSIGNED_BYTE,
-                    image
-                );
-
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
                 gl.generateMipmap(gl.TEXTURE_2D);
-
                 gl.bindTexture(gl.TEXTURE_2D, null);
                 resolve();
             };
-
             image.onerror = reject;
             image.src = 'Assets/textures/spacebits_texture.png';
         });
     }
 
-    // girar o planeta
+    
+    // MOUSE CONTROLS
+    
+
     setupMouseControls() {
         this.canvas.addEventListener('mousedown', (e) => {
+            if (this.editMode !== 'none') {
+                this.isTerrainEditing = true;
+                const rect = this.canvas.getBoundingClientRect();
+                const mx = e.clientX - rect.left;
+                const my = e.clientY - rect.top;
+                this.applyTerrainBrush(mx, my);
+                return;
+            }
+
+            if (this.isAddMode) return;
+
+            if (this.hoveredObjectIndex >= 0) {
+                this.isObjectDragging = true;
+                this.draggedObjectIndex = this.hoveredObjectIndex;
+                this.selectedObjectIndex = this.hoveredObjectIndex;
+                this.didMoveObject = false;
+                this.dragStartX = e.clientX;
+                this.dragStartY = e.clientY;
+
+                this.canvas.dispatchEvent(new CustomEvent('objectSelected', {
+                    detail: {
+                        index: this.selectedObjectIndex,
+                        object: this.placedObjects[this.selectedObjectIndex]
+                    }
+                }));
+            } else {
                 this.isDragging = true;
                 this.lastMouseX = e.clientX;
                 this.lastMouseY = e.clientY;
+            }
         });
 
         this.canvas.addEventListener('mousemove', (e) => {
@@ -437,312 +661,266 @@ export class Renderer {
             this.mouseX = e.clientX - rect.left;
             this.mouseY = e.clientY - rect.top;
 
-            if (this.isDragging) {
+            if (this.isTerrainEditing && this.editMode !== 'none') {
+                this.applyTerrainBrush(this.mouseX, this.mouseY);
+                return;
+            }
+
+            if (this.isObjectDragging && this.draggedObjectIndex >= 0) {
+                const dx = e.clientX - this.dragStartX;
+                const dy = e.clientY - this.dragStartY;
+                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+                    this.didMoveObject = true;
+                }
+
+                if (this.didMoveObject) {
+                    const hit = this.raycastPlanet(this.mouseX, this.mouseY);
+                    if (hit) {
+                        const obj = this.placedObjects[this.draggedObjectIndex];
+                        obj.baseX = hit.baseX;
+                        obj.baseY = hit.baseY;
+                        obj.baseZ = hit.baseZ;
+                        obj.faceId = hit.faceId;
+                        obj.faceS = hit.faceS;
+                        obj.faceT = hit.faceT;
+                        this.updateObjectPosition(obj);
+                    }
+                }
+            } else if (this.isDragging) {
                 const deltaX = e.clientX - this.lastMouseX;
                 const deltaY = e.clientY - this.lastMouseY;
-
                 this.rotationY += deltaX * 0.005;
                 this.rotationX += deltaY * 0.005;
-
                 this.lastMouseX = e.clientX;
                 this.lastMouseY = e.clientY;
             }
         });
 
         this.canvas.addEventListener('mouseup', () => {
+            this.isTerrainEditing = false;
+            this.isObjectDragging = false;
             this.isDragging = false;
         });
 
         this.canvas.addEventListener('mouseleave', () => {
             this.isDragging = false;
+            this.isObjectDragging = false;
+            this.isTerrainEditing = false;
             this.mouseX = -1;
             this.mouseY = -1;
         });
 
         this.canvas.addEventListener('click', (e) => {
+            if (this.editMode !== 'none') return;
+
+            if (this.didMoveObject) {
+                this.didMoveObject = false;
+                return;
+            }
+
+            if (this.isAddMode) {
+                const rect = this.canvas.getBoundingClientRect();
+                const mx = e.clientX - rect.left;
+                const my = e.clientY - rect.top;
+                const hit = this.raycastPlanet(mx, my);
+                if (hit) {
+                    this.placeObjectAtPoint(
+                        this.addModeModelPath,
+                        this.addModeScale,
+                        hit.baseX, hit.baseY, hit.baseZ,
+                        hit.faceId, hit.faceS, hit.faceT
+                    );
+                    this.exitAddMode();
+                }
+                return;
+            }
+
             if (this.hoveredObjectIndex >= 0) {
                 this.selectedObjectIndex = this.hoveredObjectIndex;
-
-                const event = new CustomEvent('objectSelected', {
+                this.canvas.dispatchEvent(new CustomEvent('objectSelected', {
                     detail: {
                         index: this.selectedObjectIndex,
                         object: this.placedObjects[this.selectedObjectIndex]
                     }
-                });
-                this.canvas.dispatchEvent(event);
+                }));
             } else {
                 this.selectedObjectIndex = -1;
-                const event = new CustomEvent('objectDeselected');
-                this.canvas.dispatchEvent(event);
+                this.canvas.dispatchEvent(new CustomEvent('objectDeselected'));
             }
         });
     }
 
-    createNoiseTexture() {
-        const gl = this.gl;
+    
+    // RAYCASTING
+    
 
-        const noiseData = this.noiseGenerator.generate(this.noiseParams);
-        this.cachedNoiseData = noiseData;
-        const min = noiseData.reduce((a, b) => Math.min(a, b), Infinity);
-        const max = noiseData.reduce((a, b) => Math.max(a, b), -Infinity);
-        console.log("Min:", min, "Max:", max);
-        
-        const textureData = new Uint8Array(512 * 512 * 4);
-        for (let i = 0; i < noiseData.length; i++) {
-            const value = Math.floor(noiseData[i] * 255);
-            textureData[i * 4 + 0] = value; // R
-            textureData[i * 4 + 1] = value; // G
-            textureData[i * 4 + 2] = value; // B
-            textureData[i * 4 + 3] = 255;   // A
-        }
-        
-        this.noiseTexture = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, this.noiseTexture);
-        
-        gl.texImage2D(
-            gl.TEXTURE_2D,
-            0,                
-            gl.RGBA,          
-            512,              
-            512,              
-            0,                
-            gl.RGBA,          
-            gl.UNSIGNED_BYTE, 
-            textureData
-        );
-        
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-        
-        gl.bindTexture(gl.TEXTURE_2D, null);
-        
-        this.textureLoc = gl.getUniformLocation(this.program, 'u_noiseTexture');
-    }
+    raycastPlanet(mouseX, mouseY) {
+        const ndcX = (2 * mouseX / this.canvas.clientWidth) - 1;
+        const ndcY = 1 - (2 * mouseY / this.canvas.clientHeight);
 
-    resizeCanvas() {
-        this.canvas.width = window.innerWidth;
-        this.canvas.height = window.innerHeight;
-        this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-        this.resizePickingFramebuffer(this.canvas.width, this.canvas.height);
-    }
+        const projectionMatrix = mat4.create();
+        mat4.perspective(projectionMatrix, Math.PI / 4, this.canvas.width / this.canvas.height, 0.1, 100.0);
 
-    clearScreen() {
-        this.gl.clearColor(0.1, 0.1, 0.15, 1.0);
-        this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
-    }
-
-    renderObjectsPicking(projectionMatrix, viewMatrix, planetModelMatrix) {
-        const gl = this.gl;
-
-        if (this.placedObjects.length === 0) {
-            return;
-        }
-
-        gl.useProgram(this.pickingObjectProgram);
-
-        for (let i = 0; i < this.placedObjects.length; i++) {
-            const obj = this.placedObjects[i];
-            const objectLocalMatrix = this.getObjectModelMatrix(obj);
-
-            const worldMatrix = mat4.create();
-            mat4.multiply(worldMatrix, planetModelMatrix, objectLocalMatrix);
-
-            const mvMatrix = mat4.create();
-            mat4.multiply(mvMatrix, viewMatrix, worldMatrix);
-            const mvpMatrix = mat4.create();
-            mat4.multiply(mvpMatrix, projectionMatrix, mvMatrix);
-
-            const id = i + 1;
-            const idColor = [
-                ((id >> 0) & 0xFF) / 0xFF,
-                ((id >> 8) & 0xFF) / 0xFF,
-                ((id >> 16) & 0xFF) / 0xFF,
-                ((id >> 24) & 0xFF) / 0xFF
-            ];
-
-            gl.uniformMatrix4fv(this.pickingObjectMatrixLoc, false, mvpMatrix);
-            gl.uniformMatrix4fv(this.pickingObjectWorldMatrixLoc, false, worldMatrix);
-            gl.uniform4fv(this.pickingObjectIdLoc, idColor);
-
-            gl.bindVertexArray(obj.model.pickingVao);
-
-            const indexType = obj.model.useUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
-            gl.drawElements(gl.TRIANGLES, obj.model.numElements, indexType, 0);
-        }
-
-        gl.bindVertexArray(null);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
-    }
-
-    pickObject(projectionMatrix, viewMatrix, planetModelMatrix) {
-        const gl = this.gl;
-
-        gl.bindFramebuffer(gl.FRAMEBUFFER, this.pickingFramebuffer);
-        gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-
-        gl.enable(gl.DEPTH_TEST);
-        gl.clearColor(0, 0, 0, 0);
-        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
-        this.renderObjectsPicking(projectionMatrix, viewMatrix, planetModelMatrix);
-
-        const pixelX = this.mouseX * gl.canvas.width / gl.canvas.clientWidth;
-        const pixelY = gl.canvas.height - this.mouseY * gl.canvas.height / gl.canvas.clientHeight - 1;
-
-        const data = new Uint8Array(4);
-        gl.readPixels(
-            Math.floor(pixelX),
-            Math.floor(pixelY),
-            1,
-            1,
-            gl.RGBA,
-            gl.UNSIGNED_BYTE,
-            data
-        );
-
-        const id = data[0] + (data[1] << 8) + (data[2] << 16) + (data[3] << 24);
-
-        if (id > 0) {
-            this.hoveredObjectIndex = id - 1;
-        } else {
-            this.hoveredObjectIndex = -1;
-        }
-
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    }
-
-    render() {
-        const gl = this.gl;
+        const viewMatrix = mat4.create();
+        mat4.translate(viewMatrix, viewMatrix, [0, 0, -this.cameraDistance]);
 
         const planetModelMatrix = mat4.create();
         mat4.rotateY(planetModelMatrix, planetModelMatrix, this.rotationY);
         mat4.rotateX(planetModelMatrix, planetModelMatrix, this.rotationX);
 
-        const lightProjectionMatrix = mat4.create();
-        const frustumSize = 5.0; 
-        mat4.ortho(lightProjectionMatrix, -frustumSize, frustumSize, -frustumSize, frustumSize, 0.1, 30.0);
+        const vpMatrix = mat4.create();
+        mat4.multiply(vpMatrix, projectionMatrix, viewMatrix);
+        const vpPlanet = mat4.create();
+        mat4.multiply(vpPlanet, vpMatrix, planetModelMatrix);
+        const invVPPlanet = mat4.create();
+        if (!mat4.invert(invVPPlanet, vpPlanet)) return null;
 
-        const lightViewMatrix = mat4.create();
-        mat4.lookAt(lightViewMatrix,
-            this.lightPos,
-            this.lightTarget,
-            this.lightUp
-        );
-
-        const lightMatrix = mat4.create();
-        mat4.multiply(lightMatrix, lightProjectionMatrix, lightViewMatrix);
-
-        const planetLightMVP = mat4.create();
-        mat4.multiply(planetLightMVP, lightMatrix, planetModelMatrix);
-
-        gl.viewport(0, 0, this.shadowMapSize, this.shadowMapSize);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFramebuffer);
-        gl.clear(gl.DEPTH_BUFFER_BIT);
-        gl.enable(gl.DEPTH_TEST);
-
-        // Objetos fazem sombra
-        this.renderObjectsDepth(lightMatrix, planetModelMatrix);
-
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-        this.clearScreen();
-
-        const projectionMatrix = mat4.create();
-        mat4.perspective(
-            projectionMatrix,
-            Math.PI / 4,
-            this.canvas.width / this.canvas.height,
-            0.1,
-            100.0
-        );
-
-        const viewMatrix = mat4.create();
-        const cameraPos = [0, 0, this.cameraDistance];
-        mat4.translate(viewMatrix, viewMatrix, [0, 0, -this.cameraDistance]);
-
-        const viewProjectionMatrix = mat4.create();
-        mat4.multiply(viewProjectionMatrix, projectionMatrix, viewMatrix);
-
-        // Renderizar estrelas no fundo
-        this.renderStars(viewProjectionMatrix);
-
-        this.pickObject(projectionMatrix, viewMatrix, planetModelMatrix);
-
-        const planetMVP = mat4.create();
-        const planetMV = mat4.create();
-        mat4.multiply(planetMV, viewMatrix, planetModelMatrix);
-        mat4.multiply(planetMVP, projectionMatrix, planetMV);
-
-        gl.useProgram(this.program);
-        gl.uniformMatrix4fv(this.matrixLoc, false, planetMVP);
-        gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_worldMatrix'), false, planetModelMatrix);
-
-        gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_lightMatrix'), false, lightMatrix);
-        gl.uniform3fv(gl.getUniformLocation(this.program, 'u_lightPos'), this.lightPos);
-        gl.uniform3fv(gl.getUniformLocation(this.program, 'u_cameraPos'), cameraPos);
-
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, this.noiseTexture);
-        gl.uniform1i(this.textureLoc, 0);
-
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, this.shadowMap);
-        gl.uniform1i(gl.getUniformLocation(this.program, 'u_shadowMap'), 1);
-
-        gl.uniform1i(this.useColorLoc, false);
-        gl.bindVertexArray(this.vao);
-        gl.drawElements(gl.TRIANGLES, this.numElements, gl.UNSIGNED_INT, 0);  
-
-        // Renderizar objetos
-        this.renderObjects(projectionMatrix, viewMatrix, lightMatrix, planetModelMatrix);
-
-        if (this.showWireframe) {
-            gl.enable(gl.POLYGON_OFFSET_FILL);
-            gl.polygonOffset(1, 1);
-            gl.disable(gl.BLEND);
-            gl.useProgram(this.program);
-            
-            gl.uniformMatrix4fv(this.matrixLoc, false, planetMVP);
-            gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_worldMatrix'), false, planetModelMatrix);
-            gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_lightMatrix'), false, lightMatrix);
-            
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, this.noiseTexture);
-            gl.uniform1i(this.textureLoc, 0);
-            
-            gl.activeTexture(gl.TEXTURE1);
-            gl.bindTexture(gl.TEXTURE_2D, this.shadowMap);
-            gl.uniform1i(gl.getUniformLocation(this.program, 'u_shadowMap'), 1);
-            
-            gl.uniform1i(this.useColorLoc, true);
-            gl.uniform3f(this.colorLoc, 0.0, 0.0, 0.0);
-            gl.bindVertexArray(this.vaoLines);
-            gl.drawElements(gl.LINES, this.numElementsLines, gl.UNSIGNED_INT, 0);
-            gl.disable(gl.POLYGON_OFFSET_FILL);
-            gl.bindVertexArray(null);
+        function transformPoint4(m, p) {
+            const x = m[0]*p[0] + m[4]*p[1] + m[8]*p[2]  + m[12]*p[3];
+            const y = m[1]*p[0] + m[5]*p[1] + m[9]*p[2]  + m[13]*p[3];
+            const z = m[2]*p[0] + m[6]*p[1] + m[10]*p[2] + m[14]*p[3];
+            const w = m[3]*p[0] + m[7]*p[1] + m[11]*p[2] + m[15]*p[3];
+            if (w !== 0) return [x/w, y/w, z/w];
+            return [x, y, z];
         }
 
-        this.rotationY += 0.001;
+        const nearLocal = transformPoint4(invVPPlanet, [ndcX, ndcY, -1, 1]);
+        const farLocal  = transformPoint4(invVPPlanet, [ndcX, ndcY,  1, 1]);
+
+        const rayDir = [
+            farLocal[0] - nearLocal[0],
+            farLocal[1] - nearLocal[1],
+            farLocal[2] - nearLocal[2]
+        ];
+        const rayLen = Math.sqrt(rayDir[0]**2 + rayDir[1]**2 + rayDir[2]**2);
+        rayDir[0] /= rayLen;
+        rayDir[1] /= rayLen;
+        rayDir[2] /= rayLen;
+
+        // Raio maximo do planeta: 1.0 + 1.8 = 2.8
+        const R = 2.8;
+        const ox = nearLocal[0], oy = nearLocal[1], oz = nearLocal[2];
+        const dx = rayDir[0], dy = rayDir[1], dz = rayDir[2];
+
+        const a = dx*dx + dy*dy + dz*dz;
+        const b = 2 * (ox*dx + oy*dy + oz*dz);
+        const c = ox*ox + oy*oy + oz*oz - R*R;
+
+        const discriminant = b*b - 4*a*c;
+        if (discriminant < 0) return null;
+
+        const t = (-b - Math.sqrt(discriminant)) / (2 * a);
+        if (t < 0) return null;
+
+        const hitX = ox + t * dx;
+        const hitY = oy + t * dy;
+        const hitZ = oz + t * dz;
+
+        const len = Math.sqrt(hitX*hitX + hitY*hitY + hitZ*hitZ);
+        const baseX = hitX / len;
+        const baseY = hitY / len;
+        const baseZ = hitZ / len;
+
+        // Converter para coordenadas de face do cubo
+        const faceCoord = sphereDirToFace(baseX, baseY, baseZ);
+
+        return {
+            baseX, baseY, baseZ,
+            faceId: faceCoord.faceId,
+            faceS: faceCoord.s,
+            faceT: faceCoord.t
+        };
     }
 
-    toggleWireframe() {
-        this.showWireframe = !this.showWireframe;
-        return this.showWireframe;
+    
+    // TERRAIN EDITING
+    
+
+    enterEditMode(mode) {
+        if (this.isAddMode) this.exitAddMode();
+        this.editMode = mode;
+        this.canvas.dispatchEvent(new CustomEvent('editModeChanged', { detail: { mode } }));
     }
 
-    updateNoiseTexture() {
-        this.cachedNoiseData = null;
-        this.createNoiseTexture();
+    exitEditMode() {
+        this.editMode = 'none';
+        this.isTerrainEditing = false;
+        this.canvas.dispatchEvent(new CustomEvent('editModeChanged', { detail: { mode: 'none' } }));
+    }
+
+    applyTerrainBrush(mouseX, mouseY) {
+        const hit = this.raycastPlanet(mouseX, mouseY);
+        if (!hit) return;
+
+        const { faceId, faceS, faceT, baseX, baseY, baseZ } = hit;
+        const res = this.heightmapResolution;
+        const brushRadiusFace = (this.brushRadius / res) * 2;
+        const strength = this.editMode === 'raise' ? this.brushStrength : -this.brushStrength;
+        const radiusPx = this.brushRadius;
+
+        // Pintar na face primaria
+        this.paintBrushOnFace(faceId, faceS, faceT, radiusPx, strength);
+
+        // Cross-face: se o brush se estende alem das bordas da face
+        const centerDir = [baseX, baseY, baseZ];
+        const adj = getAdjacency(faceId);
+        const overflows = [
+            { cond: faceS - brushRadiusFace < -1, edge: 'left' },
+            { cond: faceS + brushRadiusFace > 1, edge: 'right' },
+            { cond: faceT - brushRadiusFace < -1, edge: 'bottom' },
+            { cond: faceT + brushRadiusFace > 1, edge: 'top' }
+        ];
+
+        for (const { cond, edge } of overflows) {
+            if (!cond) continue;
+
+            const adjFaceId = adj[edge].face;
+            const projCoord = projectDirToFace(centerDir, adjFaceId);
+            if (!projCoord) continue;
+
+            this.paintBrushOnFace(adjFaceId, projCoord.s, projCoord.t, radiusPx, strength);
+        }
+
+        // Reconstruir mesh do terreno
+        this.buildTerrainMesh();
+
+        // Reposicionar objetos
         this.repositionAllObjects();
     }
 
-    setNoiseParams(params) {
-        this.noiseParams = { ...this.noiseParams, ...params };
+    paintBrushOnFace(faceId, centerS, centerT, radiusPx, strength) {
+        const res = this.heightmapResolution;
+        const data = this.heightmapData[faceId];
+
+        const centerPx = (centerS + 1) / 2 * (res - 1);
+        const centerPy = (centerT + 1) / 2 * (res - 1);
+
+        const minX = Math.max(0, Math.floor(centerPx - radiusPx));
+        const maxX = Math.min(res - 1, Math.ceil(centerPx + radiusPx));
+        const minY = Math.max(0, Math.floor(centerPy - radiusPx));
+        const maxY = Math.min(res - 1, Math.ceil(centerPy + radiusPx));
+
+        for (let y = minY; y <= maxY; y++) {
+            for (let x = minX; x <= maxX; x++) {
+                const dx = x - centerPx;
+                const dy = y - centerPy;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist > radiusPx) continue;
+
+                const nd = dist / radiusPx;
+                const falloff = 1.0 - nd * nd * (3.0 - 2.0 * nd);
+
+                const idx = y * res + x;
+                data[idx] = Math.max(0, Math.min(1, data[idx] + strength * falloff));
+            }
+        }
     }
 
-    // Carregar objeto
+    
+    // OBJECT MANAGEMENT
+    
+
     async loadModel(path) {
         if (this.loadedModels.has(path)) {
             return this.loadedModels.get(path);
@@ -750,7 +928,6 @@ export class Renderer {
 
         const objData = await OBJLoader.load(path);
         const gl = this.gl;
-
         const stride = 32;
 
         const vertexBuffer = gl.createBuffer();
@@ -761,114 +938,98 @@ export class Renderer {
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, objData.indices, gl.STATIC_DRAW);
 
+        // VAO principal (objetos)
         const vao = gl.createVertexArray();
         gl.bindVertexArray(vao);
-
         gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-
         if (this.objectPositionLoc !== -1) {
             gl.enableVertexAttribArray(this.objectPositionLoc);
             gl.vertexAttribPointer(this.objectPositionLoc, 3, gl.FLOAT, false, stride, 0);
-        } else {
-            console.warn('objectPositionLoc is -1');
         }
-
         if (this.objectNormalLoc !== -1) {
             gl.enableVertexAttribArray(this.objectNormalLoc);
             gl.vertexAttribPointer(this.objectNormalLoc, 3, gl.FLOAT, false, stride, 12);
         }
-
         if (this.objectUVLoc !== -1) {
             gl.enableVertexAttribArray(this.objectUVLoc);
             gl.vertexAttribPointer(this.objectUVLoc, 2, gl.FLOAT, false, stride, 24);
         }
-
         gl.bindVertexArray(null);
 
+        // VAO depth
         const depthVao = gl.createVertexArray();
         gl.bindVertexArray(depthVao);
-
         gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-
         if (this.depthObjectPositionLoc !== -1) {
             gl.enableVertexAttribArray(this.depthObjectPositionLoc);
             gl.vertexAttribPointer(this.depthObjectPositionLoc, 3, gl.FLOAT, false, stride, 0);
-        } else {
-            console.warn('depthObjectPositionLoc is -1');
         }
-
         gl.bindVertexArray(null);
 
+        // VAO picking
         const pickingVao = gl.createVertexArray();
         gl.bindVertexArray(pickingVao);
-
         gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-
         if (this.pickingObjectPositionLoc !== -1) {
             gl.enableVertexAttribArray(this.pickingObjectPositionLoc);
             gl.vertexAttribPointer(this.pickingObjectPositionLoc, 3, gl.FLOAT, false, stride, 0);
-        } else {
-            console.warn('pickingObjectPositionLoc is -1');
         }
-
         gl.bindVertexArray(null);
 
         gl.bindBuffer(gl.ARRAY_BUFFER, null);
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
 
         const model = {
-            vao,
-            depthVao,
-            pickingVao,
-            vertexBuffer,
-            indexBuffer,
+            vao, depthVao, pickingVao, vertexBuffer, indexBuffer,
             numElements: objData.indices.length,
-            useUint32: objData.useUint32 
+            useUint32: objData.useUint32
         };
 
         this.loadedModels.set(path, model);
         return model;
     }
 
-    // Pra colocar os objetos na superficie do planeta
-    getNoiseValueAtUV(u, v) {
-        const texWidth = 512;
-        const texHeight = 512;
-        
-        if (!this.cachedNoiseData) {
-            this.cachedNoiseData = this.noiseGenerator.generate(this.noiseParams);
-        }
-        
-        // Normalizar UV para 0-1
-        u = ((u % 1) + 1) % 1;
-        v = ((v % 1) + 1) % 1;
-        
-        const x = u * (texWidth - 1);
-        const y = v * (texHeight - 1);
-        
-        const x1 = Math.floor(x);
-        const y1 = Math.floor(y);
-        const x2 = Math.min(x1 + 1, texWidth - 1);
-        const y2 = Math.min(y1 + 1, texHeight - 1);
-        
-        const tx = x - x1;
-        const ty = y - y1;
-        
-        const p11 = this.cachedNoiseData[y1 * texWidth + x1];
-        const p21 = this.cachedNoiseData[y1 * texWidth + x2];
-        const p12 = this.cachedNoiseData[y2 * texWidth + x1];
-        const p22 = this.cachedNoiseData[y2 * texWidth + x2];
-        
-        const top = p11 * (1 - tx) + p21 * tx;
-        const bottom = p12 * (1 - tx) + p22 * tx;
-        
-        return top * (1 - ty) + bottom * ty;
+    async placeObjectAtPoint(modelPath, scale, baseX, baseY, baseZ, faceId, faceS, faceT) {
+        const model = await this.loadModel(modelPath);
+
+        const noiseValue = this.sampleHeightFromCache(faceId, faceS, faceT);
+        const smoothNoise = Math.pow(noiseValue, 1.2);
+        const displacement = smoothNoise * 1.8;
+
+        const obj = {
+            model,
+            faceId, faceS, faceT,
+            baseX, baseY, baseZ,
+            scale,
+            position: [0, 0, 0],
+            normal: [baseX, baseY, baseZ],
+            noiseValue, smoothNoise, displacement
+        };
+
+        this.placedObjects.push(obj);
+        this.updateObjectPosition(obj);
+        return obj;
     }
 
-    // Calculos de posição dos objetos
+    enterAddMode(modelPath, scale) {
+        if (this.editMode !== 'none') this.exitEditMode();
+        this.isAddMode = true;
+        this.addModeModelPath = modelPath;
+        this.addModeScale = scale;
+        this.loadModel(modelPath);
+        this.canvas.dispatchEvent(new CustomEvent('addModeChanged', { detail: { active: true } }));
+    }
+
+    exitAddMode() {
+        this.isAddMode = false;
+        this.addModeModelPath = '';
+        this.addModeScale = 1.0;
+        this.canvas.dispatchEvent(new CustomEvent('addModeChanged', { detail: { active: false } }));
+    }
+
     async placeObject(modelPath, scale) {
         const theta = Math.random() * Math.PI * 2;
         const phi = Math.acos(2 * Math.random() - 1);
@@ -877,44 +1038,27 @@ export class Renderer {
         const baseY = Math.cos(phi);
         const baseZ = Math.sin(phi) * Math.sin(theta);
 
-        const u = 0.5 + Math.atan2(baseZ, baseX) / (2 * Math.PI);
-        const v = 0.5 - Math.asin(baseY) / Math.PI;
+        const faceCoord = sphereDirToFace(baseX, baseY, baseZ);
 
         const model = await this.loadModel(modelPath);
-
-        if (!this.cachedNoiseData) {
-            this.cachedNoiseData = this.noiseGenerator.generate(this.noiseParams);
-        }
-
-        const noiseValue = this.getNoiseValueAtUV(u, v);
+        const noiseValue = this.sampleHeightFromCache(faceCoord.faceId, faceCoord.s, faceCoord.t);
         const smoothNoise = Math.pow(noiseValue, 1.2);
         const displacement = smoothNoise * 1.8;
-        
+
         const obj = {
             model,
-            u,
-            v,
-            baseX,
-            baseY,
-            baseZ,
+            faceId: faceCoord.faceId,
+            faceS: faceCoord.s,
+            faceT: faceCoord.t,
+            baseX, baseY, baseZ,
             scale,
             position: [0, 0, 0],
             normal: [baseX, baseY, baseZ],
-            noiseValue,
-            smoothNoise,
-            displacement
+            noiseValue, smoothNoise, displacement
         };
 
         this.placedObjects.push(obj);
         this.updateObjectPosition(obj);
-        
-        console.log("Objeto colocado:");
-        console.log("  UV:", obj.u.toFixed(3), obj.v.toFixed(3));
-        console.log("  Noise value:", noiseValue.toFixed(3));
-        console.log("  Smooth noise:", smoothNoise.toFixed(3));
-        console.log("  Displacement:", displacement.toFixed(3));
-        console.log("  Final position:", obj.position.map(p => p.toFixed(3)));
-        
         return obj;
     }
 
@@ -922,25 +1066,22 @@ export class Renderer {
         this.placedObjects = [];
     }
 
-    // Pra quando mexer no noise
     updateObjectPosition(obj) {
-        const noiseValue = this.getNoiseValueAtUV(obj.u, obj.v);
-        
+        const noiseValue = this.sampleHeightFromCache(obj.faceId, obj.faceS, obj.faceT);
         const smoothNoise = Math.pow(noiseValue, 1.2);
-        const displacement = smoothNoise * 1.8; 
-        
+        const displacement = smoothNoise * 1.8;
+
         const totalRadius = 1.0 + displacement;
-        const surfaceOffset = 0.01; 
-        
+        const surfaceOffset = 0.01;
 
         obj.position[0] = obj.baseX * (totalRadius + surfaceOffset);
         obj.position[1] = obj.baseY * (totalRadius + surfaceOffset);
         obj.position[2] = obj.baseZ * (totalRadius + surfaceOffset);
-        
+
         obj.normal[0] = obj.baseX;
         obj.normal[1] = obj.baseY;
         obj.normal[2] = obj.baseZ;
-        
+
         obj.height = smoothNoise;
     }
 
@@ -950,43 +1091,11 @@ export class Renderer {
         }
     }
 
-    renderObjectsDepth(lightMatrix, planetModelMatrix) {
-        const gl = this.gl;
-
-        if (this.placedObjects.length === 0) {
-            return;
-        }
-
-        gl.useProgram(this.depthObjectProgram);
-
-        for (const obj of this.placedObjects) {
-            const objectLocalMatrix = this.getObjectModelMatrix(obj);
-
-            const worldMatrix = mat4.create();
-            mat4.multiply(worldMatrix, planetModelMatrix, objectLocalMatrix);
-
-            gl.uniformMatrix4fv(this.depthObjectMatrixLoc, false, lightMatrix);
-            gl.uniformMatrix4fv(this.depthObjectWorldMatrixLoc, false, worldMatrix);
-
-            gl.bindVertexArray(obj.model.depthVao);
-            
-            const indexType = obj.model.useUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
-            gl.drawElements(gl.TRIANGLES, obj.model.numElements, indexType, 0);
-        }
-        
-        gl.bindVertexArray(null);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
-        gl.bindBuffer(gl.ARRAY_BUFFER, null);
-    }
-
-    
-    // Pra colocar os objetos na superficie do planeta
     getObjectModelMatrix(obj) {
         const modelMatrix = mat4.create();
         const normal = obj.normal;
 
         let refFront = [0, 0, 1];
-
         let front = [
             refFront[0] - normal[0] * (normal[0]*refFront[0] + normal[1]*refFront[1] + normal[2]*refFront[2]),
             refFront[1] - normal[1] * (normal[0]*refFront[0] + normal[1]*refFront[1] + normal[2]*refFront[2]),
@@ -994,7 +1103,6 @@ export class Renderer {
         ];
 
         const frontLength = Math.sqrt(front[0]*front[0] + front[1]*front[1] + front[2]*front[2]);
-
         if (frontLength < 0.001) {
             refFront = [1, 0, 0];
             front = [
@@ -1028,7 +1136,186 @@ export class Renderer {
         return modelMatrix;
     }
 
-    // Pra renderizar os objetos
+    
+    // RENDER PASSES
+    
+
+    renderTerrainDepth(lightMatrix, planetModelMatrix) {
+        const gl = this.gl;
+        gl.useProgram(this.depthProgram);
+        gl.uniformMatrix4fv(this.depthLightMatrixLoc, false, lightMatrix);
+        gl.uniformMatrix4fv(this.depthWorldMatrixLoc, false, planetModelMatrix);
+
+        gl.bindVertexArray(this.terrainVao);
+        gl.drawElements(gl.TRIANGLES, this.terrainNumIndices, gl.UNSIGNED_INT, 0);
+        gl.bindVertexArray(null);
+    }
+
+    renderObjectsDepth(lightMatrix, planetModelMatrix) {
+        const gl = this.gl;
+
+        if (this.placedObjects.length === 0) return;
+
+        gl.useProgram(this.depthObjectProgram);
+
+        for (const obj of this.placedObjects) {
+            const objectLocalMatrix = this.getObjectModelMatrix(obj);
+            const worldMatrix = mat4.create();
+            mat4.multiply(worldMatrix, planetModelMatrix, objectLocalMatrix);
+
+            gl.uniformMatrix4fv(this.depthObjectMatrixLoc, false, lightMatrix);
+            gl.uniformMatrix4fv(this.depthObjectWorldMatrixLoc, false, worldMatrix);
+
+            gl.bindVertexArray(obj.model.depthVao);
+            const indexType = obj.model.useUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+            gl.drawElements(gl.TRIANGLES, obj.model.numElements, indexType, 0);
+        }
+
+        gl.bindVertexArray(null);
+    }
+
+    renderObjectsPicking(projectionMatrix, viewMatrix, planetModelMatrix) {
+        const gl = this.gl;
+
+        if (this.placedObjects.length === 0) return;
+
+        gl.useProgram(this.pickingObjectProgram);
+
+        for (let i = 0; i < this.placedObjects.length; i++) {
+            const obj = this.placedObjects[i];
+            const objectLocalMatrix = this.getObjectModelMatrix(obj);
+            const worldMatrix = mat4.create();
+            mat4.multiply(worldMatrix, planetModelMatrix, objectLocalMatrix);
+            const mvMatrix = mat4.create();
+            mat4.multiply(mvMatrix, viewMatrix, worldMatrix);
+            const mvpMatrix = mat4.create();
+            mat4.multiply(mvpMatrix, projectionMatrix, mvMatrix);
+
+            const id = i + 1;
+            const idColor = [
+                ((id >> 0) & 0xFF) / 0xFF,
+                ((id >> 8) & 0xFF) / 0xFF,
+                ((id >> 16) & 0xFF) / 0xFF,
+                ((id >> 24) & 0xFF) / 0xFF
+            ];
+
+            gl.uniformMatrix4fv(this.pickingObjectMatrixLoc, false, mvpMatrix);
+            gl.uniformMatrix4fv(this.pickingObjectWorldMatrixLoc, false, worldMatrix);
+            gl.uniform4fv(this.pickingObjectIdLoc, idColor);
+
+            gl.bindVertexArray(obj.model.pickingVao);
+            const indexType = obj.model.useUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+            gl.drawElements(gl.TRIANGLES, obj.model.numElements, indexType, 0);
+        }
+
+        gl.bindVertexArray(null);
+    }
+
+    pickObject(projectionMatrix, viewMatrix, planetModelMatrix) {
+        const gl = this.gl;
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.pickingFramebuffer);
+        gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+        gl.enable(gl.DEPTH_TEST);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        this.renderObjectsPicking(projectionMatrix, viewMatrix, planetModelMatrix);
+
+        const pixelX = this.mouseX * gl.canvas.width / gl.canvas.clientWidth;
+        const pixelY = gl.canvas.height - this.mouseY * gl.canvas.height / gl.canvas.clientHeight - 1;
+
+        const data = new Uint8Array(4);
+        gl.readPixels(Math.floor(pixelX), Math.floor(pixelY), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, data);
+
+        const id = data[0] + (data[1] << 8) + (data[2] << 16) + (data[3] << 24);
+        this.hoveredObjectIndex = id > 0 ? id - 1 : -1;
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+
+    renderTerrain(planetMVP, planetModelMatrix, lightMatrix, cameraPos) {
+        const gl = this.gl;
+
+        gl.useProgram(this.program);
+        gl.uniformMatrix4fv(this.matrixLoc, false, planetMVP);
+        gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_worldMatrix'), false, planetModelMatrix);
+        gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_lightMatrix'), false, lightMatrix);
+        gl.uniform3fv(gl.getUniformLocation(this.program, 'u_lightPos'), this.lightPos);
+        gl.uniform3fv(gl.getUniformLocation(this.program, 'u_cameraPos'), cameraPos);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.shadowMap);
+        gl.uniform1i(gl.getUniformLocation(this.program, 'u_shadowMap'), 0);
+
+        gl.uniform1f(this.seaLevelLoc, this.seaLevel);
+        gl.uniform1f(this.sandRangeLoc, this.sandRange);
+        gl.uniform1i(this.useColorLoc, false);
+
+        gl.bindVertexArray(this.terrainVao);
+        gl.drawElements(gl.TRIANGLES, this.terrainNumIndices, gl.UNSIGNED_INT, 0);
+        gl.bindVertexArray(null);
+    }
+
+    renderTerrainWireframe(planetMVP, planetModelMatrix, lightMatrix) {
+        const gl = this.gl;
+
+        gl.enable(gl.POLYGON_OFFSET_FILL);
+        gl.polygonOffset(1, 1);
+
+        gl.useProgram(this.program);
+        gl.uniformMatrix4fv(this.matrixLoc, false, planetMVP);
+        gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_worldMatrix'), false, planetModelMatrix);
+        gl.uniformMatrix4fv(gl.getUniformLocation(this.program, 'u_lightMatrix'), false, lightMatrix);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.shadowMap);
+        gl.uniform1i(gl.getUniformLocation(this.program, 'u_shadowMap'), 0);
+
+        gl.uniform1f(this.seaLevelLoc, this.seaLevel);
+        gl.uniform1f(this.sandRangeLoc, this.sandRange);
+
+        gl.uniform1i(this.useColorLoc, true);
+        gl.uniform3f(this.colorLoc, 0.0, 0.0, 0.0);
+
+        gl.bindVertexArray(this.terrainVao);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.terrainEdgeBuffer);
+        gl.drawElements(gl.LINES, this.terrainNumEdgeIndices, gl.UNSIGNED_INT, 0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.terrainIdxBuffer);
+
+        gl.disable(gl.POLYGON_OFFSET_FILL);
+        gl.bindVertexArray(null);
+    }
+
+    renderWater(planetMVP, planetModelMatrix, lightMatrix, cameraPos) {
+        const gl = this.gl;
+
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.depthMask(false);
+        gl.disable(gl.CULL_FACE);
+
+        gl.useProgram(this.waterProgram);
+        gl.uniformMatrix4fv(this.waterMatrixLoc, false, planetMVP);
+        gl.uniformMatrix4fv(gl.getUniformLocation(this.waterProgram, 'u_worldMatrix'), false, planetModelMatrix);
+        gl.uniformMatrix4fv(gl.getUniformLocation(this.waterProgram, 'u_lightMatrix'), false, lightMatrix);
+        gl.uniform3fv(gl.getUniformLocation(this.waterProgram, 'u_lightPos'), this.lightPos);
+        gl.uniform3fv(gl.getUniformLocation(this.waterProgram, 'u_cameraPos'), cameraPos);
+        gl.uniform1f(this.waterTimeLoc, this.time);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.shadowMap);
+        gl.uniform1i(gl.getUniformLocation(this.waterProgram, 'u_shadowMap'), 0);
+
+        gl.bindVertexArray(this.waterVao);
+        gl.drawElements(gl.TRIANGLES, this.waterNumElements, gl.UNSIGNED_INT, 0);
+        gl.bindVertexArray(null);
+
+        gl.depthMask(true);
+        gl.enable(gl.CULL_FACE);
+        gl.disable(gl.BLEND);
+    }
+
     renderObjects(projectionMatrix, viewMatrix, lightMatrix, planetModelMatrix) {
         const gl = this.gl;
         gl.enable(gl.BLEND);
@@ -1058,7 +1345,6 @@ export class Renderer {
 
             const worldMatrix = mat4.create();
             mat4.multiply(worldMatrix, planetModelMatrix, objectLocalMatrix);
-
             const mvMatrix = mat4.create();
             mat4.multiply(mvMatrix, viewMatrix, worldMatrix);
             const mvpMatrix = mat4.create();
@@ -1067,44 +1353,125 @@ export class Renderer {
             gl.uniformMatrix4fv(this.objectMatrixLoc, false, mvpMatrix);
             gl.uniformMatrix4fv(gl.getUniformLocation(this.objectProgram, 'u_worldMatrix'), false, worldMatrix);
             gl.uniformMatrix4fv(gl.getUniformLocation(this.objectProgram, 'u_lightMatrix'), false, lightMatrix);
-
             gl.uniform1i(this.objectIsSelectedLoc, i === this.selectedObjectIndex ? 1 : 0);
 
-            const lightDir = [
-                this.lightPos[0] - obj.position[0],
-                this.lightPos[1] - obj.position[1],
-                this.lightPos[2] - obj.position[2]
-            ];
-
-            const len = Math.sqrt(lightDir[0]*lightDir[0] + lightDir[1]*lightDir[1] + lightDir[2]*lightDir[2]);
-            const normalizedLightDir = [lightDir[0]/len, lightDir[1]/len, lightDir[2]/len];
-            
-            const dotProduct = 
-                obj.normal[0] * normalizedLightDir[0] +
-                obj.normal[1] * normalizedLightDir[1] +
-                obj.normal[2] * normalizedLightDir[2];
-            
-            const shadowFactor = Math.max(0.2, dotProduct * 0.5 + 0.5);
-            
-            const shadowFactorLoc = gl.getUniformLocation(this.objectProgram, 'u_shadowFactor');
-            if (shadowFactorLoc) {
-                gl.uniform1f(shadowFactorLoc, shadowFactor);
-            }
-
             gl.bindVertexArray(obj.model.vao);
-            
             const indexType = obj.model.useUint32 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
             gl.drawElements(gl.TRIANGLES, obj.model.numElements, indexType, 0);
         }
-        gl.bindVertexArray(null);
-        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
-        gl.bindBuffer(gl.ARRAY_BUFFER, null);
-        gl.useProgram(this.program);
 
+        gl.bindVertexArray(null);
         gl.disable(gl.BLEND);
     }
 
-    // Controle da luz
+    render() {
+        const gl = this.gl;
+
+        const planetModelMatrix = mat4.create();
+        mat4.rotateY(planetModelMatrix, planetModelMatrix, this.rotationY);
+        mat4.rotateX(planetModelMatrix, planetModelMatrix, this.rotationX);
+
+        const lightProjectionMatrix = mat4.create();
+        const frustumSize = 5.0;
+        mat4.ortho(lightProjectionMatrix, -frustumSize, frustumSize, -frustumSize, frustumSize, 0.1, 30.0);
+
+        const lightViewMatrix = mat4.create();
+        mat4.lookAt(lightViewMatrix, this.lightPos, this.lightTarget, this.lightUp);
+
+        const lightMatrix = mat4.create();
+        mat4.multiply(lightMatrix, lightProjectionMatrix, lightViewMatrix);
+
+        gl.viewport(0, 0, this.shadowMapSize, this.shadowMapSize);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFramebuffer);
+        gl.clear(gl.DEPTH_BUFFER_BIT);
+        gl.enable(gl.DEPTH_TEST);
+
+        this.renderTerrainDepth(lightMatrix, planetModelMatrix);
+        this.renderObjectsDepth(lightMatrix, planetModelMatrix);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+
+        gl.clearColor(0.1, 0.1, 0.15, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        const projectionMatrix = mat4.create();
+        mat4.perspective(projectionMatrix, Math.PI / 4, this.canvas.width / this.canvas.height, 0.1, 100.0);
+
+        const viewMatrix = mat4.create();
+        const cameraPos = [0, 0, this.cameraDistance];
+        mat4.translate(viewMatrix, viewMatrix, [0, 0, -this.cameraDistance]);
+
+        const viewProjectionMatrix = mat4.create();
+        mat4.multiply(viewProjectionMatrix, projectionMatrix, viewMatrix);
+
+        this.renderStars(viewProjectionMatrix);
+
+        this.pickObject(projectionMatrix, viewMatrix, planetModelMatrix);
+
+        const planetMV = mat4.create();
+        mat4.multiply(planetMV, viewMatrix, planetModelMatrix);
+        const planetMVP = mat4.create();
+        mat4.multiply(planetMVP, projectionMatrix, planetMV);
+
+        this.renderTerrain(planetMVP, planetModelMatrix, lightMatrix, cameraPos);
+
+        this.renderObjects(projectionMatrix, viewMatrix, lightMatrix, planetModelMatrix);
+
+        if (this.showWireframe) {
+            this.renderTerrainWireframe(planetMVP, planetModelMatrix, lightMatrix);
+        }
+
+        this.renderWater(planetMVP, planetModelMatrix, lightMatrix, cameraPos);
+
+        this.time += 0.016;
+
+        if (!this.isObjectDragging && !this.isAddMode && this.editMode === 'none') {
+            this.rotationY += 0.001;
+        }
+    }
+    
+    resizeCanvas() {
+        this.canvas.width = window.innerWidth;
+        this.canvas.height = window.innerHeight;
+        this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+        if (this.pickingTexture) {
+            this.resizePickingFramebuffer(this.canvas.width, this.canvas.height);
+        }
+    }
+
+    toggleWireframe() {
+        this.showWireframe = !this.showWireframe;
+        return this.showWireframe;
+    }
+
+    updateNoiseTexture() {
+        this.generateHeightmaps();
+        this.buildTerrainMesh();
+        this.repositionAllObjects();
+    }
+
+    setNoiseParams(params) {
+        this.noiseParams = { ...this.noiseParams, ...params };
+    }
+
+    setSeaLevel(value) {
+        this.seaLevel = value;
+        this.initWaterMesh();
+    }
+
+    setSandRange(value) {
+        this.sandRange = value;
+    }
+
+    setBrushRadius(value) {
+        this.brushRadius = value;
+    }
+
+    setBrushStrength(value) {
+        this.brushStrength = value;
+    }
+
     setLightPosition(x, y, z) {
         this.lightPos = [x, y, z];
     }
@@ -1117,7 +1484,6 @@ export class Renderer {
         this.lightUp = [x, y, z];
     }
 
-    // Controle de objetos selecionados
     setSelectedObjectScale(scale) {
         if (this.selectedObjectIndex >= 0 && this.selectedObjectIndex < this.placedObjects.length) {
             this.placedObjects[this.selectedObjectIndex].scale = scale;
@@ -1150,13 +1516,7 @@ export class Renderer {
         mat4.translate(viewMatrix, viewMatrix, [0, 0, -this.cameraDistance]);
 
         const projectionMatrix = mat4.create();
-        mat4.perspective(
-            projectionMatrix,
-            Math.PI / 4,
-            this.canvas.width / this.canvas.height,
-            0.1,
-            100.0
-        );
+        mat4.perspective(projectionMatrix, Math.PI / 4, this.canvas.width / this.canvas.height, 0.1, 100.0);
 
         const worldPos = [worldMatrix[12], worldMatrix[13], worldMatrix[14], 1.0];
 
