@@ -464,6 +464,67 @@ export const pickingObjectFragmentShaderSource = glsl`#version 300 es
 `;
 
 
+export const cometVertexShaderSource = glsl`#version 300 es
+    in vec3 a_position;
+    in vec3 a_normal;
+
+    uniform mat4 u_mvpMatrix;
+    uniform mat4 u_modelMatrix;
+
+    out vec3 v_normal;
+    out vec3 v_worldPos;
+    out vec3 v_localPos;
+
+    void main() {
+        vec4 worldPos = u_modelMatrix * vec4(a_position, 1.0);
+        v_worldPos = worldPos.xyz;
+        gl_Position = u_mvpMatrix * vec4(a_position, 1.0);
+        v_normal = normalize(mat3(u_modelMatrix) * a_normal);
+        v_localPos = a_position;
+    }
+`;
+
+export const cometFragmentShaderSource = glsl`#version 300 es
+    precision highp float;
+
+    in vec3 v_normal;
+    in vec3 v_worldPos;
+    in vec3 v_localPos;
+
+    uniform vec3 u_cameraPos;
+    uniform float u_destroyProgress;
+
+    out vec4 outColor;
+
+    void main() {
+        vec3 normal = normalize(v_normal);
+        vec3 viewDir = normalize(u_cameraPos - v_worldPos);
+
+        // Cores do cometa: nucleo brilhante -> borda alaranjada
+        vec3 coreColor  = vec3(1.0, 0.75, 0.25);  // laranja quente brilhante
+        vec3 midColor   = vec3(1.0, 0.35, 0.0);   // laranja forte intenso
+        vec3 outerColor = vec3(0.85, 0.05, 0.0);  // vermelho alaranjado profu
+
+
+
+        float fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 2.5);
+        vec3 color = mix(coreColor, midColor, fresnel * 0.7);
+        color = mix(color, outerColor, fresnel * fresnel);
+
+        float ambient = 0.6;
+        float diff = max(dot(normal, viewDir), 0.0) * 0.4;
+        vec3 finalColor = color * (ambient + diff);
+
+        float alpha = 1.0;
+        if (u_destroyProgress > 0.0) {
+            finalColor = mix(finalColor, vec3(1.0, 0.2, 0.0), u_destroyProgress);
+            alpha = 1.0 - u_destroyProgress;
+        }
+
+        outColor = vec4(finalColor, alpha);
+    }
+`;
+
 export const starVertexShaderSource = glsl`#version 300 es
     in vec3 a_position;
     in float a_size;

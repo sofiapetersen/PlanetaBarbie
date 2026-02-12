@@ -160,7 +160,6 @@ function main() {
         renderer.clearObjects();
     });
 
-    // Tecla Escape cancela modo de adição ou edição de terreno
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             if (renderer.isAddMode) renderer.exitAddMode();
@@ -168,7 +167,6 @@ function main() {
         }
     });
 
-    // Atualizar visual do botão quando o modo de adição muda
     canvas.addEventListener('addModeChanged', (e) => {
         if (e.detail.active) {
             addObjectButton.textContent = 'Cancelar Adição';
@@ -258,24 +256,25 @@ function main() {
         floatingSlider.style.display = 'none';
     });
 
+    const scoreDisplay = document.getElementById('score-display');
+    canvas.addEventListener('scoreChanged', (e) => {
+        scoreDisplay.textContent = `Pontuação: ${e.detail.score}`;
+    });
 
     canvas.style.cursor = 'grab';
     let lastHoveredIndex = -1;
 
     function updateCursor() {
-        // Modo de edição de terreno: cursor crosshair
         if (renderer.editMode !== 'none') {
             canvas.style.cursor = 'crosshair';
             return;
         }
 
-        // Modo de adição: cursor crosshair
         if (renderer.isAddMode) {
             canvas.style.cursor = 'crosshair';
             return;
         }
 
-        // Arrastando objeto: cursor move
         if (renderer.isObjectDragging) {
             canvas.style.cursor = 'move';
             return;

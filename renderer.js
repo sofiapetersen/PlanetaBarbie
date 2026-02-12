@@ -12,8 +12,11 @@ import {
     starVertexShaderSource,
     starFragmentShaderSource,
     waterVertexShaderSource,
-    waterFragmentShaderSource
+    waterFragmentShaderSource,
+    cometVertexShaderSource,
+    cometFragmentShaderSource
 } from './shaders.js';
+import { CometManager } from './comet-manager.js';
 import { createShader, createProgram } from './webgl-utils.js';
 import { mat4 } from './math-utils.js';
 import { NoiseGenerator } from './noise.js';
@@ -177,7 +180,7 @@ export class Renderer {
         this.isDragging = false;
         this.lastMouseX = 0;
         this.lastMouseY = 0;
-        this.cameraDistance = 5.5;
+        this.cameraDistance = 7.5;
         this.showWireframe = true;
 
         this.setupMouseControls();
@@ -223,6 +226,11 @@ export class Renderer {
         this.brushRadius = 15;
         this.brushStrength = 0.02;
         this.isTerrainEditing = false;
+
+        // Sistema de cometas
+        this.cometManager = new CometManager();
+        this.initCometSystem();
+        this.lastFrameTime = performance.now();
     }
 
     
@@ -718,10 +726,21 @@ export class Renderer {
                 return;
             }
 
+            // Verificar clique em cometa primeiro
+            const rect = this.canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left;
+            const my = e.clientY - rect.top;
+
+            const cometIndex = this.raycastComets(mx, my);
+            if (cometIndex >= 0) {
+                this.cometManager.destroyCometByClick(cometIndex);
+                this.canvas.dispatchEvent(new CustomEvent('scoreChanged', {
+                    detail: { score: this.cometManager.score }
+                }));
+                return;
+            }
+
             if (this.isAddMode) {
-                const rect = this.canvas.getBoundingClientRect();
-                const mx = e.clientX - rect.left;
-                const my = e.clientY - rect.top;
                 const hit = this.raycastPlanet(mx, my);
                 if (hit) {
                     this.placeObjectAtPoint(
@@ -1136,9 +1155,305 @@ export class Renderer {
         return modelMatrix;
     }
 
-    
+    // Cometa
+    initCometSystem() {
+        const gl = this.gl;
+
+        this.cometProgram = createProgram(
+            gl,
+            createShader(gl, gl.VERTEX_SHADER, cometVertexShaderSource),
+            createShader(gl, gl.FRAGMENT_SHADER, cometFragmentShaderSource)
+        );
+
+        this.cometPositionLoc = gl.getAttribLocation(this.cometProgram, 'a_position');
+        this.cometNormalLoc = gl.getAttribLocation(this.cometProgram, 'a_normal');
+        this.cometMvpMatrixLoc = gl.getUniformLocation(this.cometProgram, 'u_mvpMatrix');
+        this.cometModelMatrixLoc = gl.getUniformLocation(this.cometProgram, 'u_modelMatrix');
+        this.cometCameraPosLoc = gl.getUniformLocation(this.cometProgram, 'u_cameraPos');
+        this.cometDestroyProgressLoc = gl.getUniformLocation(this.cometProgram, 'u_destroyProgress');
+
+        const t = (1 + Math.sqrt(5)) / 2;
+        const rawVerts = [
+            -1, t, 0,   1, t, 0,   -1, -t, 0,   1, -t, 0,
+             0, -1, t,   0, 1, t,   0, -1, -t,   0, 1, -t,
+             t, 0, -1,   t, 0, 1,  -t, 0, -1,  -t, 0, 1
+        ];
+
+        for (let i = 0; i < rawVerts.length; i += 3) {
+            const len = Math.sqrt(rawVerts[i] ** 2 + rawVerts[i + 1] ** 2 + rawVerts[i + 2] ** 2);
+            rawVerts[i] /= len;
+            rawVerts[i + 1] /= len;
+            rawVerts[i + 2] /= len;
+        }
+
+        const icoIndices = [
+            0, 11, 5,  0, 5, 1,  0, 1, 7,  0, 7, 10,  0, 10, 11,
+            1, 5, 9,  5, 11, 4,  11, 10, 2,  10, 7, 6,  7, 1, 8,
+            3, 9, 4,  3, 4, 2,  3, 2, 6,  3, 6, 8,  3, 8, 9,
+            4, 9, 5,  2, 4, 11,  6, 2, 10,  8, 6, 7,  9, 8, 1
+        ];
+
+        const subdivided = this._subdivideIcosahedron(rawVerts, icoIndices);
+        const positions = new Float32Array(subdivided.positions);
+        const normals = new Float32Array(subdivided.positions); 
+        const indices = new Uint16Array(subdivided.indices);
+
+        this.cometNumIndices = indices.length;
+
+        // VAO para cometas
+        this.cometVao = gl.createVertexArray();
+        gl.bindVertexArray(this.cometVao);
+
+        const posBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+        if (this.cometPositionLoc !== -1) {
+            gl.enableVertexAttribArray(this.cometPositionLoc);
+            gl.vertexAttribPointer(this.cometPositionLoc, 3, gl.FLOAT, false, 0, 0);
+        }
+
+        const normBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, normBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, normals, gl.STATIC_DRAW);
+        if (this.cometNormalLoc !== -1) {
+            gl.enableVertexAttribArray(this.cometNormalLoc);
+            gl.vertexAttribPointer(this.cometNormalLoc, 3, gl.FLOAT, false, 0, 0);
+        }
+
+        const idxBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+        gl.bindVertexArray(null);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+    }
+
+    _subdivideIcosahedron(verts, indices) {
+        const midCache = {};
+        const newVerts = [...verts];
+        const newIndices = [];
+
+        function getMidpoint(i0, i1) {
+            const key = Math.min(i0, i1) + '_' + Math.max(i0, i1);
+            if (midCache[key] !== undefined) return midCache[key];
+
+            const x = (newVerts[i0 * 3] + newVerts[i1 * 3]) / 2;
+            const y = (newVerts[i0 * 3 + 1] + newVerts[i1 * 3 + 1]) / 2;
+            const z = (newVerts[i0 * 3 + 2] + newVerts[i1 * 3 + 2]) / 2;
+            const len = Math.sqrt(x * x + y * y + z * z);
+
+            const idx = newVerts.length / 3;
+            newVerts.push(x / len, y / len, z / len);
+            midCache[key] = idx;
+            return idx;
+        }
+
+        for (let i = 0; i < indices.length; i += 3) {
+            const a = indices[i], b = indices[i + 1], c = indices[i + 2];
+            const ab = getMidpoint(a, b);
+            const bc = getMidpoint(b, c);
+            const ca = getMidpoint(c, a);
+
+            newIndices.push(
+                a, ab, ca,
+                b, bc, ab,
+                c, ca, bc,
+                ab, bc, ca
+            );
+        }
+
+        return { positions: newVerts, indices: newIndices };
+    }
+
+    getCometModelMatrix(comet) {
+        const m = mat4.create();
+
+        mat4.translate(m, m, comet.position);
+
+        const axis = comet.rotationAxis;
+        const angle = comet.rotation;
+        const c = Math.cos(angle), s = Math.sin(angle);
+        const t = 1 - c;
+        const x = axis[0], y = axis[1], z = axis[2];
+
+        const rotMatrix = mat4.create();
+        mat4.set(rotMatrix,
+            t * x * x + c,     t * x * y + s * z, t * x * z - s * y, 0,
+            t * x * y - s * z, t * y * y + c,     t * y * z + s * x, 0,
+            t * x * z + s * y, t * y * z - s * x, t * z * z + c,     0,
+            0, 0, 0, 1
+        );
+
+        mat4.multiply(m, m, rotMatrix);
+
+        mat4.scale(m, m, [comet.size, comet.size, comet.size]);
+
+        return m;
+    }
+
+    renderComets(projectionMatrix, viewMatrix, cameraPos) {
+        const gl = this.gl;
+        const comets = this.cometManager.comets;
+        if (comets.length === 0) return;
+
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+        gl.useProgram(this.cometProgram);
+        gl.uniform3fv(this.cometCameraPosLoc, cameraPos);
+
+        gl.bindVertexArray(this.cometVao);
+
+        for (const comet of comets) {
+            const modelMatrix = this.getCometModelMatrix(comet);
+            const mvMatrix = mat4.create();
+            mat4.multiply(mvMatrix, viewMatrix, modelMatrix);
+            const mvpMatrix = mat4.create();
+            mat4.multiply(mvpMatrix, projectionMatrix, mvMatrix);
+
+            gl.uniformMatrix4fv(this.cometMvpMatrixLoc, false, mvpMatrix);
+            gl.uniformMatrix4fv(this.cometModelMatrixLoc, false, modelMatrix);
+
+            const destroyProgress = comet.destroying ? Math.min(comet.destroyTimer / 0.4, 1.0) : 0.0;
+            gl.uniform1f(this.cometDestroyProgressLoc, destroyProgress);
+
+            gl.drawElements(gl.TRIANGLES, this.cometNumIndices, gl.UNSIGNED_SHORT, 0);
+        }
+
+        gl.bindVertexArray(null);
+        gl.disable(gl.BLEND);
+    }
+
+    raycastComets(mouseX, mouseY) {
+        const ndcX = (2 * mouseX / this.canvas.clientWidth) - 1;
+        const ndcY = 1 - (2 * mouseY / this.canvas.clientHeight);
+
+        const projectionMatrix = mat4.create();
+        mat4.perspective(projectionMatrix, Math.PI / 4, this.canvas.width / this.canvas.height, 0.1, 100.0);
+
+        const viewMatrix = mat4.create();
+        mat4.translate(viewMatrix, viewMatrix, [0, 0, -this.cameraDistance]);
+
+        const vpMatrix = mat4.create();
+        mat4.multiply(vpMatrix, projectionMatrix, viewMatrix);
+        const invVP = mat4.create();
+        if (!mat4.invert(invVP, vpMatrix)) return -1;
+
+        function transformPoint4(m, p) {
+            const x = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12] * p[3];
+            const y = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13] * p[3];
+            const z = m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14] * p[3];
+            const w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15] * p[3];
+            if (w !== 0) return [x / w, y / w, z / w];
+            return [x, y, z];
+        }
+
+        const nearWorld = transformPoint4(invVP, [ndcX, ndcY, -1, 1]);
+        const farWorld = transformPoint4(invVP, [ndcX, ndcY, 1, 1]);
+
+        const rayDir = [
+            farWorld[0] - nearWorld[0],
+            farWorld[1] - nearWorld[1],
+            farWorld[2] - nearWorld[2]
+        ];
+        const rayLen = Math.sqrt(rayDir[0] ** 2 + rayDir[1] ** 2 + rayDir[2] ** 2);
+        rayDir[0] /= rayLen;
+        rayDir[1] /= rayLen;
+        rayDir[2] /= rayLen;
+
+        let closestIndex = -1;
+        let closestT = Infinity;
+
+        for (let i = 0; i < this.cometManager.comets.length; i++) {
+            const comet = this.cometManager.comets[i];
+            if (comet.destroying) continue;
+
+            const cx = comet.position[0], cy = comet.position[1], cz = comet.position[2];
+            const R = comet.size * 1.5; 
+
+            const ox = nearWorld[0] - cx;
+            const oy = nearWorld[1] - cy;
+            const oz = nearWorld[2] - cz;
+
+            const a = rayDir[0] ** 2 + rayDir[1] ** 2 + rayDir[2] ** 2;
+            const b = 2 * (ox * rayDir[0] + oy * rayDir[1] + oz * rayDir[2]);
+            const c = ox ** 2 + oy ** 2 + oz ** 2 - R * R;
+
+            const disc = b * b - 4 * a * c;
+            if (disc < 0) continue;
+
+            const t = (-b - Math.sqrt(disc)) / (2 * a);
+            if (t > 0 && t < closestT) {
+                closestT = t;
+                closestIndex = i;
+            }
+        }
+
+        return closestIndex;
+    }
+
+    getTerrainRadiusAtDir(dirX, dirY, dirZ) {
+        const faceCoord = sphereDirToFace(dirX, dirY, dirZ);
+        const h = this.sampleHeightFromCache(faceCoord.faceId, faceCoord.s, faceCoord.t);
+        const smoothNoise = Math.pow(h, 1.2);
+        const displacement = smoothNoise * 1.8;
+        return 1.0 + displacement;
+    }
+
+    updateAndCheckComets(deltaTime, planetModelMatrix) {
+        this.cometManager.updateComets(deltaTime);
+
+        const planetInvMatrix = mat4.create();
+        mat4.invert(planetInvMatrix, planetModelMatrix);
+
+        const comets = this.cometManager.comets;
+        for (let i = comets.length - 1; i >= 0; i--) {
+            const comet = comets[i];
+            if (comet.destroying) continue;
+
+            const impact = this.cometManager.checkPlanetCollision(
+                comet,
+                planetInvMatrix,
+                (dx, dy, dz) => this.getTerrainRadiusAtDir(dx, dy, dz)
+            );
+
+            if (impact) {
+                const craterRadius = this.cometManager.config.craterRadius;
+                const craterDepth = this.cometManager.config.craterDepth;
+
+                this.paintBrushOnFace(impact.faceId, impact.faceS, impact.faceT, craterRadius, -craterDepth);
+
+                const adj = getAdjacency(impact.faceId);
+                const centerDir = [impact.dirX, impact.dirY, impact.dirZ];
+                const brushRadiusFace = (craterRadius / this.heightmapResolution) * 2;
+
+                const overflows = [
+                    { cond: impact.faceS - brushRadiusFace < -1, edge: 'left' },
+                    { cond: impact.faceS + brushRadiusFace > 1, edge: 'right' },
+                    { cond: impact.faceT - brushRadiusFace < -1, edge: 'bottom' },
+                    { cond: impact.faceT + brushRadiusFace > 1, edge: 'top' }
+                ];
+
+                for (const { cond, edge } of overflows) {
+                    if (!cond) continue;
+                    const adjFaceId = adj[edge].face;
+                    const projCoord = projectDirToFace(centerDir, adjFaceId);
+                    if (!projCoord) continue;
+                    this.paintBrushOnFace(adjFaceId, projCoord.s, projCoord.t, craterRadius, -craterDepth);
+                }
+
+                this.buildTerrainMesh();
+                this.repositionAllObjects();
+
+                this.cometManager.destroyCometByImpact(i);
+            }
+        }
+    }
+
+
     // RENDER PASSES
-    
+
 
     renderTerrainDepth(lightMatrix, planetModelMatrix) {
         const gl = this.gl;
@@ -1367,9 +1682,15 @@ export class Renderer {
     render() {
         const gl = this.gl;
 
+        const now = performance.now();
+        const deltaTime = Math.min((now - this.lastFrameTime) / 1000, 0.1);
+        this.lastFrameTime = now;
+
         const planetModelMatrix = mat4.create();
         mat4.rotateY(planetModelMatrix, planetModelMatrix, this.rotationY);
         mat4.rotateX(planetModelMatrix, planetModelMatrix, this.rotationX);
+
+        this.updateAndCheckComets(deltaTime, planetModelMatrix);
 
         const lightProjectionMatrix = mat4.create();
         const frustumSize = 5.0;
@@ -1421,6 +1742,9 @@ export class Renderer {
         if (this.showWireframe) {
             this.renderTerrainWireframe(planetMVP, planetModelMatrix, lightMatrix);
         }
+
+        // Renderizar cometas (antes da agua, pois cometas sao opacos)
+        this.renderComets(projectionMatrix, viewMatrix, cameraPos);
 
         this.renderWater(planetMVP, planetModelMatrix, lightMatrix, cameraPos);
 
