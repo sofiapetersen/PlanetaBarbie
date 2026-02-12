@@ -166,7 +166,7 @@ export class Renderer {
         // Agua
         
         this.seaLevel = 0.30;
-        this.sandRange = 0.04;
+        this.sandRange = 0.10;
         this.waterVao = null;
         this.waterNumElements = 0;
         this.time = 0;
